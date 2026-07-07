@@ -7,6 +7,7 @@ import src.spght.data_structures as data_structures
 import pywt
 from typing import Sequence
 
+from spght.linearization import level_from_extent
 
 def hierarchize(
     nodal_values: npt.NDArray,
@@ -17,13 +18,9 @@ def hierarchize(
     level: npt.NDArray = np.ndarray(num_dim, dtype=int)
     for d in range(num_dim):
         if isinstance(deviate_from_power_of_two, int):
-            level[d] = math.ceil(
-                np.log2(nodal_values.shape[d] - deviate_from_power_of_two)
-            )
+            level[d] = level_from_extent(nodal_values.shape[d] - deviate_from_power_of_two)
         else:
-            level[d] = math.ceil(
-                np.log2(nodal_values.shape[d] - deviate_from_power_of_two[d])
-            )
+            level[d] = level_from_extent(nodal_values.shape[d] - deviate_from_power_of_two[d])
 
     modified_values = [nodal_values.copy()]
     for d in range(num_dim):
