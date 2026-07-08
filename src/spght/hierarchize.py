@@ -2,25 +2,30 @@
 
 import numpy as np
 import numpy.typing as npt
-import math
 import src.spght.data_structures as data_structures
 import pywt
 from typing import Sequence
 
 from spght.linearization import level_from_extent
+from spght.wavelets import half_haar
+
 
 def hierarchize(
     nodal_values: npt.NDArray,
     deviate_from_power_of_two: int | Sequence[int] = 0,
-    wavelet: str = "haar",
+    wavelet: pywt.Wavelet = half_haar,
 ) -> data_structures.SparseGridHierarchicalTensors:
     num_dim = nodal_values.ndim
     level: npt.NDArray = np.ndarray(num_dim, dtype=int)
     for d in range(num_dim):
         if isinstance(deviate_from_power_of_two, int):
-            level[d] = level_from_extent(nodal_values.shape[d] - deviate_from_power_of_two)
+            level[d] = level_from_extent(
+                nodal_values.shape[d] - deviate_from_power_of_two
+            )
         else:
-            level[d] = level_from_extent(nodal_values.shape[d] - deviate_from_power_of_two[d])
+            level[d] = level_from_extent(
+                nodal_values.shape[d] - deviate_from_power_of_two[d]
+            )
 
     modified_values = [nodal_values.copy()]
     for d in range(num_dim):
@@ -28,6 +33,7 @@ def hierarchize(
         updated_values = []
         for slices in modified_values:
             updated_values.extend(pywt.wavedec(slices, wavelet, axis=d))
+            # TODO add lmin
         modified_values = updated_values
 
     # construct a matching list of subspace levels: tensor product of 1D levels from 0 to level[d] for each dimension d
