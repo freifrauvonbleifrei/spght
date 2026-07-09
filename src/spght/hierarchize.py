@@ -2,7 +2,7 @@
 
 import numpy as np
 import numpy.typing as npt
-import src.spght.data_structures as data_structures
+import spght.data_structures as data_structures
 import pywt
 from typing import Sequence
 
