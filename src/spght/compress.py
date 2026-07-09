@@ -15,7 +15,7 @@ def compress(
         max_level=hierarchical_tensors.max_level,
         subspaces=dict(),
     )
-    for l, subspace in hierarchical_tensors.subspaces.items():
+    for level, subspace in hierarchical_tensors.subspaces.items():
         if np.all(np.abs(subspace.values) <= epsilon):
             continue
         elif not only_whole_subspaces and np.any(np.abs(subspace.values) < epsilon):
@@ -23,5 +23,5 @@ def compress(
                 "Partial subspace compression is not implemented yet."
             )
         else:
-            compressed_tensors.subspaces[l] = deepcopy(subspace)
+            compressed_tensors.subspaces[level] = deepcopy(subspace)
     return compressed_tensors
