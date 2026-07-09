@@ -49,3 +49,19 @@ def test_interpolate_1d_level3():
             assert np.isclose(value, 7.0)
         else:
             assert np.isclose(value, -8.0)
+
+
+def test_interpolate_2d_level_1_1():
+    coordinates = np.array([0.3, 0.7])
+    nodal_values = np.array([[1.0, 2.0], [3.0, 4.0]])
+    hierarchical_tensors = hierarchize(nodal_values)
+    value = interpolate(coordinates, hierarchical_tensors)
+    assert np.isclose(value, 2.0)
+
+
+def test_interpolate_2d_level_2_1():
+    coordinates = np.array([0.6, 0.2])
+    nodal_values = np.array([[1.0, 2.0, 3.0, 4.0], [3.0, 4.0, 5.0, 6.0]])
+    hierarchical_tensors = hierarchize(nodal_values)
+    value = interpolate(coordinates, hierarchical_tensors)
+    assert np.isclose(value, 4.0)
