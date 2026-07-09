@@ -10,7 +10,7 @@ description = "Sparse Grid Hierarchical Tensors"
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = ["Programming Language :: Python :: 3"]
-dependencies = ["numpy", "PyWavelets"]
+dependencies = ["bitarray","numpy", "PyWavelets"]
 
 [build-system]
 requires = ["hatchling"]
