@@ -49,10 +49,10 @@ def multidim_index_to_index(
     else:
         level = [level_from_extent(extent) + 1 for extent in extents]
         assert all(
-            e == 2 ** (l - 1) for e, l in zip(extents, level)
+            e == 2 ** (lvl - 1) for e, lvl in zip(extents, level)
         ), "Extents must be powers of two for Z-order curves."
         multidim_bit_index: list[ba.bitarray] = [
-            bau.int2ba(idx, length=2**l) for idx, l in zip(multidim_index, level)
+            bau.int2ba(idx, length=2**lvl) for idx, lvl in zip(multidim_index, level)
         ]
         raise NotImplementedError("Z-order curves not implemented yet")
     return index
