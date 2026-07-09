@@ -36,7 +36,7 @@ jobs:
         continue-on-error: true # we want to get the coverage report even if tests fail
         run: |
           pytest test/ --cov=spght --cov-report=xml --cov-report=html
-      - name: Get coverage, fail if under 90%, update coverage.svg
+      - name: Get coverage, fail if under 80%, update coverage.svg
         id: get-coverage
         run: |
           coverage report --precision=2 --fail-under=90 --show-missing --skip-empty
