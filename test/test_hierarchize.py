@@ -1,5 +1,4 @@
 import numpy as np
-from icecream import ic
 
 from spght.hierarchize import hierarchize
 
@@ -7,7 +6,6 @@ from spght.hierarchize import hierarchize
 def test_hierarchize_haar_1d():
     nodal_values = np.array([1.0, 2.0, 3.0, 4.0])
     result = hierarchize(nodal_values)
-    ic(result)
     # assert isinstance(result, SparseGridHierarchicalTensors) #??
     assert result.dimensions == 1
     assert result.max_level == (2,)
@@ -20,14 +18,16 @@ def test_hierarchize_haar_1d():
     assert np.allclose(result.subspaces[(1,)].values, np.array([-1.0]))
     assert result.subspaces[(2,)].extents == (2,)
     assert result.subspaces[(2,)].precision_bits == 64
-    assert np.allclose(
-        result.subspaces[(2,)].values, np.array([-0.5, -0.5])
-    )
-    
+    assert np.allclose(result.subspaces[(2,)].values, np.array([-0.5, -0.5]))
+
     nodal_values_coarser = np.array([1.5, 3.5])
     result_coarser = hierarchize(nodal_values_coarser)
-    assert np.allclose(result_coarser.subspaces[(0,)].values, result.subspaces[(0,)].values)
-    assert np.allclose(result_coarser.subspaces[(1,)].values, result.subspaces[(1,)].values)
+    assert np.allclose(
+        result_coarser.subspaces[(0,)].values, result.subspaces[(0,)].values
+    )
+    assert np.allclose(
+        result_coarser.subspaces[(1,)].values, result.subspaces[(1,)].values
+    )
 
 
 def test_hierarchize_haar_2d():
@@ -58,3 +58,17 @@ def test_hierarchize_haar_2d():
     assert result.subspaces[(0, 2)].extents == (1, 2)
     assert result.subspaces[(0, 2)].precision_bits == 64
     assert np.allclose(result.subspaces[(0, 2)].values, np.array([[-0.5, -0.5]]))
+    result_coarser = hierarchize(np.array([[1.5, 3.5], [3.5, 5.5]]))
+    assert len(result_coarser.subspaces) == 4
+    assert np.allclose(
+        result_coarser.subspaces[(0, 0)].values, result.subspaces[(0, 0)].values
+    )
+    assert np.allclose(
+        result_coarser.subspaces[(0, 1)].values, result.subspaces[(0, 1)].values
+    )
+    assert np.allclose(
+        result_coarser.subspaces[(1, 0)].values, result.subspaces[(1, 0)].values
+    )
+    assert np.allclose(
+        result_coarser.subspaces[(1, 1)].values, result.subspaces[(1, 1)].values
+    )
