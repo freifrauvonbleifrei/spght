@@ -48,11 +48,11 @@ def hierarchize(
         dimensions=num_dim,
         max_level=tuple(level),
         subspaces={
-            tuple(l): data_structures.Subspace(
+            tuple(lv): data_structures.Subspace(
                 extents=v.shape,
                 precision_bits=64,
                 values=v,  # modified_values.tobytes(),
             )
-            for l, v in zip(subspace_levels, modified_values)
+            for lv, v in zip(subspace_levels, modified_values)
         },
     )

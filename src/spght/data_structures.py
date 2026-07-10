@@ -20,7 +20,7 @@ class Subspace:
     precision_bits: int
     # values: bytes
     values: npt.NDArray | None = None
-    order: Literal["C", "F", "ZC", "ZF"] = "ZC"
+    order: Literal["C", "F", "ZC", "ZF"] = "C"
     index_kind: str = "full"
     padding_bits: int = 0
     indices: Sequence[int] | Sequence[tuple[int, int]] | None = None

@@ -11,6 +11,50 @@ def level_from_extent(extent: int) -> int:
     return math.ceil(np.log2(extent))
 
 
+def index_to_multidim_index(
+    index: int, extents: tuple[int, ...], order: Literal["C", "F", "ZC", "ZF"]
+) -> tuple[int, ...]:
+    """Convert a linear index to a multi-dimensional index."""
+    num_dims = len(extents)
+    multidim_index: list[int] = [0] * num_dims
+    if order == "C":
+        accumulated_product = 1
+        for i in reversed(range(num_dims)):
+            multidim_index[i] = (index // accumulated_product) % extents[i]
+            index //= extents[i]
+    elif order == "F":
+        accumulated_product = 1
+        for i in range(num_dims):
+            multidim_index[i] = (index // accumulated_product) % extents[i]
+            accumulated_product *= extents[i]
+    else:
+        raise NotImplementedError("Z-order curves not implemented yet")
+    return tuple(multidim_index)
+
+
+def multidim_index_to_index(
+    multidim_index: Sequence[int],
+    extents: Sequence[int],
+    order: Literal["C", "F", "ZC", "ZF"],
+) -> int:
+    """Convert a multi-dimensional index to a linear index."""
+    num_dims = len(extents)
+    index = 0
+    if order == "C":
+        for i in range(num_dims):
+            index = index * extents[i] + multidim_index[i]
+    elif order == "F":
+        for i in reversed(range(num_dims)):
+            index = index * extents[i] + multidim_index[i]
+    else:
+        level = [level_from_extent(extent) + 1 for extent in extents]
+        assert all(
+            e == 2 ** (lvl - 1) for e, lvl in zip(extents, level)
+        ), "Extents must be powers of two for Z-order curves."
+        raise NotImplementedError("Z-order curves not implemented yet")
+    return index
+
+
 def coordinate_to_multidim_index(
     coordinates: Sequence[float],
     extents: Sequence[int],

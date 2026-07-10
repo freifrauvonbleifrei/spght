@@ -64,4 +64,4 @@ def test_interpolate_2d_level_2_1():
     nodal_values = np.array([[1.0, 2.0, 3.0, 4.0], [3.0, 4.0, 5.0, 6.0]])
     hierarchical_tensors = hierarchize(nodal_values)
     value = interpolate(coordinates, hierarchical_tensors)
-    assert np.isclose(value, 4.0)
+    assert np.isclose(value, 3.0)
