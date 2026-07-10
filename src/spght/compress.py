@@ -16,6 +16,7 @@ def compress(
         subspaces=dict(),
     )
     for level, subspace in hierarchical_tensors.subspaces.items():
+        assert subspace.values is not None
         if np.all(np.abs(subspace.values) <= epsilon):
             continue
         elif not only_whole_subspaces and np.any(np.abs(subspace.values) < epsilon):
