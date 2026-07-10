@@ -15,15 +15,16 @@ def index_to_multidim_index(
     index: int, extents: tuple[int, ...], order: Literal["C", "F", "ZC", "ZF"]
 ) -> tuple[int, ...]:
     """Convert a linear index to a multi-dimensional index."""
-    multidim_index: list[int] = [0] * len(extents)
+    num_dims = len(extents)
+    multidim_index: list[int] = [0] * num_dims
     if order == "C":
         accumulated_product = 1
-        for i in reversed(range(len(extents))):
+        for i in reversed(range(num_dims)):
             multidim_index[i] = (index // accumulated_product) % extents[i]
-            accumulated_product *= extents[i]
+            index //= extents[i]
     elif order == "F":
         accumulated_product = 1
-        for i in range(len(extents)):
+        for i in range(num_dims):
             multidim_index[i] = (index // accumulated_product) % extents[i]
             accumulated_product *= extents[i]
     else:
@@ -37,12 +38,13 @@ def multidim_index_to_index(
     order: Literal["C", "F", "ZC", "ZF"],
 ) -> int:
     """Convert a multi-dimensional index to a linear index."""
+    num_dims = len(extents)
     index = 0
     if order == "C":
-        for i in range(len(extents)):
+        for i in range(num_dims):
             index = index * extents[i] + multidim_index[i]
     elif order == "F":
-        for i in reversed(range(len(extents))):
+        for i in reversed(range(num_dims)):
             index = index * extents[i] + multidim_index[i]
     else:
         level = [level_from_extent(extent) + 1 for extent in extents]
