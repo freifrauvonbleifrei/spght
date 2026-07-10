@@ -21,7 +21,10 @@ def iter_pole_slices(shape, axis):
 
 
 def interpolate_subspace(
-    level: Sequence[int], coordinate: np.ndarray, subspace: Subspace, wavelet=half_haar
+    level: Sequence[int],
+    coordinate: Sequence[float],
+    subspace: Subspace,
+    wavelet=half_haar,
 ) -> float:
     # interpolate on a single subspace using the wavelet transform
     # TODO reconstruct using only necessary coefficients
@@ -30,7 +33,7 @@ def interpolate_subspace(
     assert (
         len(coordinate) == num_dims
     ), "Coordinates dimensionality does not match subspace"
-    coeffs = subspace.values.copy()
+    coeffs = subspace.values.copy()  # type: ignore
 
     for d in range(num_dims):
         # for each 1-d pole in coeffs, we obtain a twice-as-long 1d array
@@ -58,12 +61,13 @@ def interpolate_subspace(
     ), "Only Haar wavelet is currently supported for interpolation"
 
     # interpolate using the scaling function at given coordinate
-    value = coeffs[coordinate_to_multidim_index(coordinate, coeffs.shape)]
+    value = coeffs[coordinate_to_multidim_index(tuple(coordinate), coeffs.shape)]
+    assert isinstance(value, float)
     return value
 
 
 def interpolate(
-    coordinates: np.ndarray,
+    coordinates: Sequence[float],
     spghtensors: SparseGridHierarchicalTensors,
     wavelet=half_haar,
 ) -> float:
