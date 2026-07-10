@@ -72,7 +72,7 @@ def interpolate(
     wavelet=half_haar,
 ) -> float:
     # assert that all coordinates are within the unit hypercube [0, 1]^d
-    if not np.all((coordinates >= 0) & (coordinates <= 1)):
+    if not all((coordinate >= 0.0) & (coordinate <= 1.0) for coordinate in coordinates):
         raise ValueError("Coordinates must be within the unit hypercube [0, 1]^d")
     # iterate over the subspaces in the SparseGridHierarchicalTensors
     # and interpolate on each of them
