@@ -66,18 +66,65 @@ def interpolate_subspace(
     return value
 
 
+def interpolate_single_coordinate(
+    coordinate: Sequence[float],
+    spghtensors: SparseGridHierarchicalTensors,
+    wavelet=half_haar,
+) -> float:
+    """Interpolate a single coordinate in [0, 1]^d using the sparse grid hierarchical tensors."""
+    # assert that all coordinates are within the unit hypercube [0, 1]^d
+    if not all(
+        (coordinate >= 0.0) and (coordinate <= 1.0) for coordinate in coordinate
+    ):
+        raise ValueError("Coordinates must be within the unit hypercube [0, 1]^d")
+    # iterate over the subspaces in the SparseGridHierarchicalTensors
+    # and interpolate on each of them
+    value: float = 0.0
+    for level, subspace in spghtensors.subspaces.items():
+        value += interpolate_subspace(level, coordinate, subspace, wavelet=wavelet)
+
+    return value
+
+
+def interpolate_many_coordinates(
+    coordinates: Sequence[Sequence[float]],
+    spghtensors: SparseGridHierarchicalTensors,
+    wavelet=half_haar,
+) -> np.ndarray:
+    """Interpolate many coordinates in [0, 1]^d using the sparse grid hierarchical tensors."""
+    # assert that all coordinates are within the unit hypercube [0, 1]^d
+    for coordinate in coordinates:
+        if not all(
+            np.all(coordinate >= 0.0) and np.all(coordinate <= 1.0)
+            for coordinate in coordinate
+        ):
+            raise ValueError("Coordinates must be within the unit hypercube [0, 1]^d")
+    # iterate over the subspaces in the SparseGridHierarchicalTensors
+    # and interpolate on each of them
+    coordinates_np = np.asarray(coordinates)
+    *batch_shape, num_dims = coordinates_np.shape
+
+    flat_coords = coordinates_np.reshape(-1, num_dims)
+
+    flat_values = np.zeros(flat_coords.shape[:-1], dtype=np.float32)
+    for level, subspace in spghtensors.subspaces.items():
+        for i, coordinate in enumerate(flat_coords):
+            flat_values[i] += interpolate_subspace(
+                level, coordinate, subspace, wavelet=wavelet
+            )
+
+    return np.asarray(flat_values).reshape(batch_shape)
+
+
 def interpolate(
     coordinates: Sequence[float],
     spghtensors: SparseGridHierarchicalTensors,
     wavelet=half_haar,
 ) -> float:
     # assert that all coordinates are within the unit hypercube [0, 1]^d
-    if not all((coordinate >= 0.0) & (coordinate <= 1.0) for coordinate in coordinates):
-        raise ValueError("Coordinates must be within the unit hypercube [0, 1]^d")
-    # iterate over the subspaces in the SparseGridHierarchicalTensors
-    # and interpolate on each of them
-    value: float = 0.0
-    for level, subspace in spghtensors.subspaces.items():
-        value += interpolate_subspace(level, coordinates, subspace, wavelet=wavelet)
-
-    return value
+    if isinstance(coordinates[0], float) or isinstance(coordinates[0], np.float32):
+        return interpolate_single_coordinate(coordinates, spghtensors, wavelet=wavelet)
+    elif isinstance(coordinates[0], (Sequence, np.ndarray)):
+        return interpolate_many_coordinates(coordinates, spghtensors, wavelet=wavelet)
+    else:
+        raise ValueError("Unexpected type for coordinates")

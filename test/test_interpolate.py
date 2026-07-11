@@ -65,3 +65,31 @@ def test_interpolate_2d_level_2_1():
     hierarchical_tensors = hierarchize(nodal_values)
     value = interpolate(coordinates, hierarchical_tensors)
     assert np.isclose(value, 3.0)
+
+
+def test_interpolate_many_2d_level_2_3():
+    nodal_values = np.array(
+        [
+            [1.0, 2.0, 3.0, 4.0],
+            [3.0, 4.0, 5.0, 6.0],
+            [5.0, 6.0, 7.0, 8.0],
+            [7.0, 8.0, 9.0, 10.0],
+            [9.0, 10.0, 11.0, 12.0],
+            [11.0, 12.0, 13.0, 14.0],
+            [13.0, 14.0, 15.0, 16.0],
+            [15.0, 16.0, 17.0, 18.0],
+        ]
+    )
+    hierarchical_tensors = hierarchize(nodal_values)
+    coordinates_1d = np.array([[0.6, 0.2], [0.1, 0.9], [0.2, 0.4]])
+    values = interpolate(coordinates_1d, hierarchical_tensors)
+    assert np.isclose(values[0], 9.0)
+    assert np.isclose(values[1], 4.0)
+    assert np.isclose(values[2], 4.0)
+
+    coordinates_2d = np.array([[[0.6, 0.2], [0.1, 0.9]], [[0.2, 0.4], [0.8, 0.8]]])
+    values_2d = interpolate(coordinates_2d, hierarchical_tensors)
+    assert np.isclose(values_2d[0, 0], 9.0)
+    assert np.isclose(values_2d[0, 1], 4.0)
+    assert np.isclose(values_2d[1, 0], 4.0)
+    assert np.isclose(values_2d[1, 1], 16.0)
