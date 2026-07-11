@@ -29,7 +29,6 @@ def interpolate_subspace(
 ) -> npt.NDArray:
     # interpolate on a single subspace using the wavelet transform
     # TODO reconstruct using only necessary coefficients
-    # TODO overload for many coordinates at once
     num_dims = len(subspace.extents)
     assert len(coordinates.shape) == 2 and coordinates.shape[1] == num_dims
 
@@ -62,7 +61,7 @@ def interpolate_subspace(
 
     # interpolate using the scaling function at given coordinate
     multidim_indices = (
-        coordinate_to_multidim_index(tuple(coordinate), coeffs.shape)
+        coordinate_to_multidim_index(coordinate, coeffs.shape)
         for coordinate in coordinates
     )
     value = np.fromiter(
