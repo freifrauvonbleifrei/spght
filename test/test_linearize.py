@@ -1,6 +1,6 @@
 import numpy as np
 
-from spght.linearization import (
+from spght.linearize import (
     coordinate_to_multidim_index,
     index_to_multidim_index,
     multidim_index_to_index,
