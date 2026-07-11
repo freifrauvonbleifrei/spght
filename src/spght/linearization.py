@@ -56,7 +56,7 @@ def multidim_index_to_index(
 
 
 def coordinate_to_multidim_index(
-    coordinates: Sequence[float],
+    coordinates: Sequence[float] | np.ndarray,
     extents: Sequence[int],
 ) -> tuple[int, ...]:
     """Convert a coordinate in [0, 1]^d to a linear index,

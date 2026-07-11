@@ -1,4 +1,5 @@
 import numpy as np
+import numpy.typing as npt
 import pywt
 from typing import Sequence
 
@@ -22,17 +23,15 @@ def iter_pole_slices(shape, axis):
 
 def interpolate_subspace(
     level: Sequence[int],
-    coordinate: Sequence[float],
+    coordinates: npt.NDArray,
     subspace: Subspace,
     wavelet=half_haar,
-) -> float:
+) -> npt.NDArray:
     # interpolate on a single subspace using the wavelet transform
     # TODO reconstruct using only necessary coefficients
-    # TODO overload for many coordinates at once
     num_dims = len(subspace.extents)
-    assert (
-        len(coordinate) == num_dims
-    ), "Coordinates dimensionality does not match subspace"
+    assert len(coordinates.shape) == 2 and coordinates.shape[1] == num_dims
+
     coeffs = subspace.values.copy()  # type: ignore
 
     for d in range(num_dims):
@@ -61,9 +60,61 @@ def interpolate_subspace(
     ), "Only Haar wavelet is currently supported for interpolation"
 
     # interpolate using the scaling function at given coordinate
-    value = coeffs[coordinate_to_multidim_index(tuple(coordinate), coeffs.shape)]
-    assert isinstance(value, float)
+    multidim_indices = (
+        coordinate_to_multidim_index(coordinate, coeffs.shape)
+        for coordinate in coordinates
+    )
+    value = np.fromiter(
+        (coeffs[multidim_index] for multidim_index in multidim_indices),
+        dtype=coeffs.dtype,
+    )
     return value
+
+
+def interpolate_single_coordinate(
+    coordinate: Sequence[float],
+    spghtensors: SparseGridHierarchicalTensors,
+    wavelet=half_haar,
+) -> float:
+    """Interpolate a single coordinate in [0, 1]^d using the sparse grid hierarchical tensors."""
+    coordinate_np = np.asarray(coordinate)
+    coordinate_np_two_d = coordinate_np.reshape(1, -1)
+    # assert that all coordinates are within the unit hypercube [0, 1]^d
+    if not np.all(coordinate_np >= 0.0) and np.all(coordinate_np <= 1.0):
+        raise ValueError("Coordinates must be within the unit hypercube [0, 1]^d")
+    # iterate over the subspaces in the SparseGridHierarchicalTensors
+    # and interpolate on each of them
+    value: float = 0.0
+    for level, subspace in spghtensors.subspaces.items():
+        value += interpolate_subspace(
+            level, coordinate_np_two_d, subspace, wavelet=wavelet
+        )[0]
+
+    return value
+
+
+def interpolate_many_coordinates(
+    coordinates: Sequence[Sequence[float]] | npt.NDArray,
+    spghtensors: SparseGridHierarchicalTensors,
+    wavelet=half_haar,
+) -> np.ndarray:
+    """Interpolate many coordinates in [0, 1]^d using the sparse grid hierarchical tensors."""
+    # assert that all coordinates are within the unit hypercube [0, 1]^d
+
+    coordinates_np = np.asarray(coordinates)
+    if not np.all(coordinates_np >= 0.0) and np.all(coordinates_np <= 1.0):
+        raise ValueError("Coordinates must be within the unit hypercube [0, 1]^d")
+    *batch_shape, num_dims = coordinates_np.shape
+
+    flat_coords = coordinates_np.reshape(-1, num_dims)
+
+    flat_values = np.zeros(flat_coords.shape[:-1], dtype=np.float32)
+    for level, subspace in spghtensors.subspaces.items():
+        flat_values += interpolate_subspace(
+            level, flat_coords, subspace, wavelet=wavelet
+        )
+
+    return np.asarray(flat_values).reshape(batch_shape)
 
 
 def interpolate(
@@ -72,12 +123,9 @@ def interpolate(
     wavelet=half_haar,
 ) -> float:
     # assert that all coordinates are within the unit hypercube [0, 1]^d
-    if not all((coordinate >= 0.0) & (coordinate <= 1.0) for coordinate in coordinates):
-        raise ValueError("Coordinates must be within the unit hypercube [0, 1]^d")
-    # iterate over the subspaces in the SparseGridHierarchicalTensors
-    # and interpolate on each of them
-    value: float = 0.0
-    for level, subspace in spghtensors.subspaces.items():
-        value += interpolate_subspace(level, coordinates, subspace, wavelet=wavelet)
-
-    return value
+    if isinstance(coordinates[0], float) or isinstance(coordinates[0], np.float32):
+        return interpolate_single_coordinate(coordinates, spghtensors, wavelet=wavelet)
+    elif isinstance(coordinates[0], (Sequence, np.ndarray)):
+        return interpolate_many_coordinates(coordinates, spghtensors, wavelet=wavelet)
+    else:
+        raise ValueError("Unexpected type for coordinates")
