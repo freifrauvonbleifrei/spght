@@ -6,15 +6,16 @@ import math
 from typing import Literal, Sequence
 
 
-## Z-order curves are similar to ALTO linearization
-
-
 def level_from_extent(extent: int) -> int:
     # TODO may need more parameters, because what's needed
     # differs between scaling and hierarchical indexing (+1)
     return math.ceil(np.log2(extent))
 
 
+Order = Literal["C", "F", "ZC", "ZF"]
+
+
+## Z-order curves are similar to ALTO linearization
 @lru_cache
 def build_masks(extent, order):
     """
@@ -86,7 +87,7 @@ def decode(pos: int, masks: list[int]) -> list[int]:
 
 
 def index_to_multidim_index(
-    index: int, extents: tuple[int, ...], order: Literal["C", "F", "ZC", "ZF"]
+    index: int, extents: tuple[int, ...], order: Order
 ) -> tuple[int, ...]:
     """Convert a linear index to a multi-dimensional index."""
     num_dims = len(extents)
@@ -116,7 +117,7 @@ def index_to_multidim_index(
 def multidim_index_to_index(
     multidim_index: Sequence[int],
     extents: Sequence[int],
-    order: Literal["C", "F", "ZC", "ZF"],
+    order: Order,
 ) -> int:
     """Convert a multi-dimensional index to a linear index."""
     num_dims = len(extents)
@@ -157,7 +158,7 @@ def coordinate_to_multidim_index(
 def coordinate_to_index(
     coordinates: Sequence[float],
     extents: Sequence[int],
-    order: Literal["C", "F", "ZC", "ZF"],
+    order: Order,
 ) -> int:
     return multidim_index_to_index(
         coordinate_to_multidim_index(coordinates, extents), extents, order
