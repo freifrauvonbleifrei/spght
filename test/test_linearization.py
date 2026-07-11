@@ -53,8 +53,7 @@ def test_index_to_multidim_index_and_back():
 
 def test_all_index_to_multidim_index_and_back():
     extents = (1, 4, 8, 2)
-    for order in ["C", "F"]:
-        # TODO "ZC", "ZF"
+    for order in ["C", "F", "ZC", "ZF"]:
         for index in range(np.prod(extents)):
             multidim_index = index_to_multidim_index(index, extents, order=order)
             print(order, index, multidim_index)

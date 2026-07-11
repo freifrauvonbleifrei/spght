@@ -1,14 +1,88 @@
+import bitarray as ba
+import bitarray.util as bau
+from functools import lru_cache
 import numpy as np
 import math
 from typing import Literal, Sequence
 
 
-## Z-order curves are analogous to ALTO linearization, modulo fitting to the extents exactly
+## Z-order curves are similar to ALTO linearization
 
 
 def level_from_extent(extent: int) -> int:
-    # TODO may need more parameters
+    # TODO may need more parameters, because what's needed
+    # differs between scaling and hierarchical indexing (+1)
     return math.ceil(np.log2(extent))
+
+
+@lru_cache
+def build_masks(extent, order):
+    """
+    order: round-robin visiting sequence of dimension indices used to
+    assign successive bit positions. A dimension drops out of the
+    rotation once it has been given all the bits it needs.
+    """
+    bits_needed = [level_from_extent(e) for e in extent]
+    remaining = bits_needed[:]
+
+    masks = [ba.bitarray(sum(bits_needed)) for _ in range(len(extent))]
+    for m in masks:
+        m.setall(0)
+
+    pos = 0
+    while any(r > 0 for r in remaining):
+        for n in order:
+            if remaining[n] > 0:
+                masks[n][pos] = 1
+                remaining[n] -= 1
+                pos += 1
+    int_masks = [bau.ba2int(m) for m in masks]
+    return int_masks
+
+
+@lru_cache
+def build_masks_zc(dims):
+    return build_masks(dims, tuple(range(len(dims))))
+
+
+@lru_cache
+def build_masks_zf(dims):
+    return build_masks(dims, tuple(reversed(range(len(dims)))))
+
+
+def pdep(src, mask):
+    result = 0
+    bb = 1
+    while mask:
+        lsb = mask & (-mask)
+        if src & bb:
+            result |= lsb
+        mask &= mask - 1
+        bb <<= 1
+    return result
+
+
+def pext(src, mask):
+    result = 0
+    bb = 1
+    while mask:
+        lsb = mask & (-mask)
+        if src & lsb:
+            result |= bb
+        mask &= mask - 1
+        bb <<= 1
+    return result
+
+
+def encode(index, masks):
+    pos = 0
+    for i_n, mask in zip(index, masks):
+        pos |= pdep(i_n, mask)
+    return pos
+
+
+def decode(pos: int, masks: list[int]) -> list[int]:
+    return [pext(pos, mask) for mask in masks]
 
 
 def index_to_multidim_index(
@@ -28,7 +102,14 @@ def index_to_multidim_index(
             multidim_index[i] = (index // accumulated_product) % extents[i]
             accumulated_product *= extents[i]
     else:
-        raise NotImplementedError("Z-order curves not implemented yet")
+        if order == "ZC":
+            masks = build_masks_zc(tuple(extents))
+        elif order == "ZF":
+            masks = build_masks_zf(tuple(extents))
+        else:
+            raise ValueError(f"Unsupported order: {order}")
+
+        multidim_index = decode(index, masks)
     return tuple(multidim_index)
 
 
@@ -47,11 +128,13 @@ def multidim_index_to_index(
         for i in reversed(range(num_dims)):
             index = index * extents[i] + multidim_index[i]
     else:
-        level = [level_from_extent(extent) + 1 for extent in extents]
-        assert all(
-            e == 2 ** (lvl - 1) for e, lvl in zip(extents, level)
-        ), "Extents must be powers of two for Z-order curves."
-        raise NotImplementedError("Z-order curves not implemented yet")
+        if order == "ZC":
+            masks = build_masks_zc(tuple(extents))
+        elif order == "ZF":
+            masks = build_masks_zf(tuple(extents))
+        else:
+            raise ValueError(f"Unsupported order: {order}")
+        index = encode(multidim_index, masks)
     return index
 
 
