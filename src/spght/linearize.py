@@ -5,10 +5,6 @@ import numpy as np
 import math
 from typing import Literal, Sequence
 
-from spght.data_structures import Subspace
-
-from icecream import ic
-
 
 def level_from_extent(extent: int) -> int:
     # TODO may need more parameters, because what's needed
@@ -141,18 +137,6 @@ def multidim_index_to_index(
             raise ValueError(f"Unsupported order: {order}")
         index = encode(multidim_index, masks)
     return index
-
-
-def reorder_subspace(subspace: Subspace, order: Order) -> Subspace:
-    if subspace.values is None:
-        return subspace
-    previous_order = subspace.order
-
-    if previous_order == order:
-        return subspace
-    raise NotImplementedError(
-        f"Reordering from {previous_order} to {order} is not implemented yet."
-    )
 
 
 def coordinate_to_multidim_index(
