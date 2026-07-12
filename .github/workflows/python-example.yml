@@ -1,0 +1,40 @@
+name: WDAS Cloud Compression
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  compress-cloud:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+        working-directory: ./example
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download and extract WDAS cloud dataset
+        run: |
+          wget https://assets.disneyanimation.com/wdas_cloud.zip
+          unzip wdas_cloud.zip
+
+      - name: Set up micromamba environment
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: cloud-openvdb-env
+          environment-file: example/cloud-openvdb-env.yaml
+          init-shell: bash
+          cache-environment: true
+          post-cleanup: "all"
+
+      - name: Install package in editable mode
+        run: pip install -e ..
+
+      - name: Run cloud compression
+        run: |
+          python3 cloud_compression.py \
+            --input=wdas_cloud/wdas_cloud_sixteenth.vdb \
+            --epsilon=0.01
