@@ -54,39 +54,54 @@ def _build_masks_zf(dims):
     return _build_masks(dims, tuple(reversed(range(len(dims)))))
 
 
+import numpy as np
+
+
 def _pdep(src, mask):
-    result = 0
+    """Vectorized PDEP: scatter src's bits (LSB-first) into mask's set positions.
+    src: uint64 ndarray, mask: python int (same mask for every element)."""
+    result = np.zeros_like(src)
     bb = 1
-    while mask:
-        lsb = mask & (-mask)
-        if src & bb:
-            result |= lsb
-        mask &= mask - 1
+    m = mask
+    while m:
+        lsb = m & (-m)
+        result |= np.where((src & bb) != 0, np.uint64(lsb), np.uint64(0))
+        m &= m - 1
         bb <<= 1
     return result
 
 
 def _pext(src, mask):
-    result = 0
+    """Vectorized PEXT: gather the bits of src at mask's set positions, packed low."""
+    result = np.zeros_like(src)
     bb = 1
-    while mask:
-        lsb = mask & (-mask)
-        if src & lsb:
-            result |= bb
-        mask &= mask - 1
+    m = mask
+    while m:
+        lsb = m & (-m)
+        result |= np.where((src & lsb) != 0, np.uint64(bb), np.uint64(0))
+        m &= m - 1
         bb <<= 1
     return result
 
 
-def _encode(index, masks):
-    pos = 0
-    for i_n, mask in zip(index, masks):
-        pos |= _pdep(i_n, mask)
+def _encode(indices, masks):
+    """indices: ndarray of shape (M, N) - one multidim index per row.
+    masks: sequence of N python ints. Returns ndarray of shape (M,)."""
+    indices = np.asarray(indices, dtype=np.uint64)
+    pos = np.zeros(indices.shape[0], dtype=np.uint64)
+    for n, mask in enumerate(masks):
+        pos |= _pdep(indices[:, n], mask)
     return pos
 
 
-def _decode(pos: int, masks: list[int]) -> list[int]:
-    return [_pext(pos, mask) for mask in masks]
+def _decode(pos, masks):
+    """pos: ndarray of shape (M,) linear indices.
+    Returns ndarray of shape (M, N), one multidim index per row."""
+    pos = np.asarray(pos, dtype=np.uint64)
+    out = np.empty((pos.shape[0], len(masks)), dtype=np.uint64)
+    for n, mask in enumerate(masks):
+        out[:, n] = _pext(pos, mask)
+    return out
 
 
 def _compute_strides(extents: Sequence[int], order: Order) -> list[int]:
@@ -127,7 +142,7 @@ def indices_to_multidim_indices(
             masks = _build_masks_zf(tuple(extents))
         else:
             raise ValueError(f"Unsupported order: {order}")
-        multidim = np.array([_decode(i, masks) for i in idx], dtype=np.int64)
+        multidim = _decode(idx, masks)
 
     return multidim
 
@@ -162,7 +177,7 @@ def multidim_indices_to_indices(
             masks = _build_masks_zf(tuple(extents))
         else:
             raise ValueError(f"Unsupported order: {order}")
-        indices = np.array([_encode(row, masks) for row in idx], dtype=np.int64)
+        indices = _encode(idx, masks)
 
     return indices
 

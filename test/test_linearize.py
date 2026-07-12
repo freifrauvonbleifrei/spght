@@ -73,3 +73,14 @@ def test_all_indices_to_multidim_indices_and_back():
                 multidim_indices_to_indices([multidim_index], extents, order=order)[0]
                 == index
             )
+
+
+def test_multidim_indices_to_indices_and_back_multiple():
+    extents = (2, 4, 3)
+    for order in ["C", "F", "ZC", "ZF"]:
+        multi_indices = np.array([[0, 1, 2], [1, 3, 0], [1, 2, 1]])
+        indices = multidim_indices_to_indices(multi_indices, extents, order=order)
+        recovered_multi_indices = indices_to_multidim_indices(
+            indices, extents, order=order
+        )
+        assert np.all(recovered_multi_indices == multi_indices)
