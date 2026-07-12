@@ -127,7 +127,7 @@ def indices_to_multidim_indices(
     idx = np.asarray(indices, dtype=np.int64).reshape(-1)
     n = idx.shape[0]
 
-    multidim = np.zeros((n, num_dims), dtype=np.int64)
+    multidim: npt.NDArray[np.int64] = np.zeros(shape=(n, num_dims), dtype=np.int64)
 
     if order in ("C", "F"):
         strides = _compute_strides(extents, order)
@@ -212,10 +212,10 @@ def coordinate_to_multidim_index(
 
 
 def coordinates_to_indices(
-    coordinates: Sequence[float],
+    coordinates: Coordinates,
     extents: Sequence[int],
     order: Order,
-) -> int:
+) -> npt.NDArray[np.int64]:
     return multidim_indices_to_indices(
         coordinates_to_multidim_indices(coordinates, extents), extents, order
     )
