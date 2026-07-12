@@ -54,12 +54,8 @@ def _build_masks_zf(dims):
     return _build_masks(dims, tuple(reversed(range(len(dims)))))
 
 
-import numpy as np
-
-
-def _pdep(src, mask):
-    """Vectorized PDEP: scatter src's bits (LSB-first) into mask's set positions.
-    src: uint64 ndarray, mask: python int (same mask for every element)."""
+def _pdep(src: npt.NDArray[np.uint64], mask: int) -> npt.NDArray[np.uint64]:
+    """Vectorized PDEP: scatter src's bits (LSB-first) into mask's set positions"""
     result = np.zeros_like(src)
     bb = 1
     m = mask
@@ -71,7 +67,7 @@ def _pdep(src, mask):
     return result
 
 
-def _pext(src, mask):
+def _pext(src: npt.NDArray[np.uint64], mask: int) -> npt.NDArray[np.uint64]:
     """Vectorized PEXT: gather the bits of src at mask's set positions, packed low."""
     result = np.zeros_like(src)
     bb = 1
@@ -84,9 +80,9 @@ def _pext(src, mask):
     return result
 
 
-def _encode(indices, masks):
-    """indices: ndarray of shape (M, N) - one multidim index per row.
-    masks: sequence of N python ints. Returns ndarray of shape (M,)."""
+def _encode(
+    indices: npt.NDArray[np.uint64], masks: Sequence[int]
+) -> npt.NDArray[np.uint64]:
     indices = np.asarray(indices, dtype=np.uint64)
     pos = np.zeros(indices.shape[0], dtype=np.uint64)
     for n, mask in enumerate(masks):
@@ -94,9 +90,10 @@ def _encode(indices, masks):
     return pos
 
 
-def _decode(pos, masks):
-    """pos: ndarray of shape (M,) linear indices.
-    Returns ndarray of shape (M, N), one multidim index per row."""
+def _decode(
+    pos: npt.NDArray[np.uint64], masks: Sequence[int]
+) -> npt.NDArray[np.uint64]:
+    """Returns one multidim index per row."""
     pos = np.asarray(pos, dtype=np.uint64)
     out = np.empty((pos.shape[0], len(masks)), dtype=np.uint64)
     for n, mask in enumerate(masks):
