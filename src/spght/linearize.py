@@ -16,6 +16,7 @@ def level_from_extent(extent: int) -> int:
 Order = Literal["C", "F", "ZC", "ZF"]
 
 MultiIndices = Union[Sequence[Sequence[int]], npt.NDArray[np.integer]]
+Coordinates = Union[Sequence[Sequence[float]], npt.NDArray[np.floating]]
 
 
 ## Z-order curves are similar to ALTO linearization
@@ -144,6 +145,19 @@ def indices_to_multidim_indices(
     return multidim
 
 
+def reshape_to_nxd(array: npt.NDArray, num_dims: int) -> npt.NDArray:
+    idx = np.asarray(array)
+    if idx.ndim == 1:
+        idx = idx.reshape(-1, num_dims)
+    elif idx.ndim != 2:
+        raise ValueError(f"Expected a 1-D or 2-D array of indices, got ndim={idx.ndim}")
+    if idx.shape[1] != num_dims:
+        raise ValueError(
+            f"Expected indices of dimensionality {num_dims}, got {idx.shape[1]}"
+        )
+    return idx
+
+
 def multidim_indices_to_indices(
     multidim_indices: MultiIndices,
     extents: Sequence[int],
@@ -153,14 +167,7 @@ def multidim_indices_to_indices(
     num_dims = len(extents)
 
     idx = np.asarray(multidim_indices, dtype=np.int64)
-    if idx.ndim == 1:
-        idx = idx.reshape(-1, num_dims)
-    elif idx.ndim != 2:
-        raise ValueError(f"Expected a 1-D or 2-D array of indices, got ndim={idx.ndim}")
-    if idx.shape[1] != num_dims:
-        raise ValueError(
-            f"Expected indices of dimensionality {num_dims}, got {idx.shape[1]}"
-        )
+    idx = reshape_to_nxd(idx, num_dims)
 
     if order in ("C", "F"):
         strides = _compute_strides(extents, order)
@@ -179,27 +186,36 @@ def multidim_indices_to_indices(
     return indices
 
 
+def coordinates_to_multidim_indices(
+    coordinates: Coordinates,
+    extents: Sequence[int],
+) -> npt.NDArray[np.int64]:
+    """Convert coordinates in [0, 1]^d to multi-dimensional indices,
+    assuming the extents cover exactly cells in the unit hypercube."""
+    coordinates = np.asarray(coordinates)
+    coordinates = reshape_to_nxd(coordinates, len(extents))
+
+    cell_widths = [1.0 / e for e in extents]
+    multidim_indices = np.apply_along_axis(
+        lambda c: [int(np.floor(ci / wi)) for ci, wi in zip(c, cell_widths)],
+        1,
+        coordinates,
+    )
+    return multidim_indices
+
+
 def coordinate_to_multidim_index(
-    coordinates: Sequence[float] | np.ndarray,
+    coordinate: Sequence[float],
     extents: Sequence[int],
 ) -> tuple[int, ...]:
-    """Convert a coordinate in [0, 1]^d to a linear index,
-    assuming the extents cover exactly cells in the unit hypercube."""
-    assert len(coordinates) == len(
-        extents
-    ), "Coordinates dimensionality does not match extents"
-    cell_widths = [1.0 / e for e in extents]
-    multidim_index = tuple(
-        int(np.floor(c / w)) for c, w in zip(coordinates, cell_widths)
-    )
-    return multidim_index
+    return tuple(coordinates_to_multidim_indices([coordinate], extents)[0])
 
 
-def coordinate_to_index(
+def coordinates_to_indices(
     coordinates: Sequence[float],
     extents: Sequence[int],
     order: Order,
 ) -> int:
     return multidim_indices_to_indices(
-        [coordinate_to_multidim_index(coordinates, extents)], extents, order
+        coordinates_to_multidim_indices(coordinates, extents), extents, order
     )
