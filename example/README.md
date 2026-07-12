@@ -19,7 +19,7 @@ pip install -e ..
 3. execute compression, for example on the smallest cloud:
 
 ```shell
-python3 cloud_compression.py --input=wdas_cloud/wdas_cloud_sixteenth.vdb --epsilon=0.01
+python3 cloud_compression.py --epsilon=0.01 wdas_cloud/wdas_cloud_sixteenth.vdb
 ```
 
 4. evaluate errors and numbers of coefficients w.r.t. the original cloud

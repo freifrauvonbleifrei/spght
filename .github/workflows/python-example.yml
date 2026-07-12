@@ -36,5 +36,5 @@ jobs:
       - name: Run cloud compression
         run: |
           python3 cloud_compression.py \
-            --input=wdas_cloud/wdas_cloud_sixteenth.vdb \
-            --epsilon=0.01
+              --epsilon=0.01 \
+              wdas_cloud/wdas_cloud_sixteenth.vdb
