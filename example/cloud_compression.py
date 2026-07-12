@@ -4,7 +4,6 @@ import numpy as np
 from os.path import basename
 
 import openvdb as vdb
-from icecream import ic
 
 from spght.compress import compress
 from spght.hierarchize import hierarchize
@@ -97,11 +96,11 @@ if __name__ == "__main__":
 
     # Hierarchize the tensor
     hierarchical_values = hierarchize(nodal_values)
-    ic(len(hierarchical_values.subspaces))
+    print("Previously:", len(hierarchical_values.subspaces))
     compressed_values = compress(
         hierarchical_values, epsilon=args.epsilon, only_whole_subspaces=True
     )
-    ic(len(compressed_values.subspaces))
+    print("After compression:", len(compressed_values.subspaces))
 
     # re-interpolate onto OpenVDB grid
     spght_openvdb_grid = spght_to_vdb_grid(
