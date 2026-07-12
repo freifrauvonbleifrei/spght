@@ -124,7 +124,7 @@ def indices_to_multidim_indices(
 ) -> npt.NDArray[np.int64]:
     """Convert multiple linear indices to multi-dimensional indices."""
     num_dims = len(extents)
-    idx = np.asarray(indices, dtype=np.int64).reshape(-1)
+    idx: npt.NDArray[np.int64] = np.array(indices, dtype=np.int64).reshape(-1)
     n = idx.shape[0]
 
     multidim: npt.NDArray[np.int64] = np.zeros(shape=(n, num_dims), dtype=np.int64)
@@ -146,7 +146,7 @@ def indices_to_multidim_indices(
 
 
 def reshape_to_nxd(array: npt.NDArray, num_dims: int) -> npt.NDArray:
-    idx = np.asarray(array)
+    idx = np.array(array)
     if idx.ndim == 1:
         idx = idx.reshape(-1, num_dims)
     elif idx.ndim != 2:
@@ -166,7 +166,7 @@ def multidim_indices_to_indices(
     """Convert multiple multi-dimensional indices to linear indices."""
     num_dims = len(extents)
 
-    idx = np.asarray(multidim_indices, dtype=np.int64)
+    idx = np.array(multidim_indices, dtype=np.int64)
     idx = reshape_to_nxd(idx, num_dims)
 
     if order in ("C", "F"):
