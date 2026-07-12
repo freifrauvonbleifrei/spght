@@ -195,12 +195,8 @@ def coordinates_to_multidim_indices(
     coordinates = np.asarray(coordinates)
     coordinates = reshape_to_nxd(coordinates, len(extents))
 
-    cell_widths = [1.0 / e for e in extents]
-    multidim_indices = np.apply_along_axis(
-        lambda c: [int(np.floor(ci / wi)) for ci, wi in zip(c, cell_widths)],
-        1,
-        coordinates,
-    )
+    cell_widths = np.array([1.0 / e for e in extents])
+    multidim_indices = np.floor_divide(coordinates, cell_widths).astype(np.int64)
     return multidim_indices
 
 
