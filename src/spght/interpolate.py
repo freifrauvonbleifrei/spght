@@ -5,7 +5,7 @@ from typing import Sequence
 
 
 from spght.data_structures import SparseGridHierarchicalTensors, Subspace
-from spght.linearization import coordinate_to_multidim_index
+from spght.linearize import coordinate_to_multidim_index
 from spght.wavelets import half_haar
 
 

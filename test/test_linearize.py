@@ -1,6 +1,6 @@
 import numpy as np
 
-from spght.linearization import (
+from spght.linearize import (
     coordinate_to_multidim_index,
     index_to_multidim_index,
     multidim_index_to_index,
@@ -24,8 +24,7 @@ def test_coordinate_to_multidim_index():
 
 def test_index_to_multidim_index_and_back():
     extents = (2, 4, 3)
-    for order in ["C", "F"]:
-        # TODO "ZC", "ZF"
+    for order in ["C", "F", "ZC", "ZF"]:
         index_five = 5
         multidim_index_five = index_to_multidim_index(index_five, extents, order=order)
         assert (
@@ -36,6 +35,10 @@ def test_index_to_multidim_index_and_back():
             assert multidim_index_five == (0, 1, 2)
         elif order == "F":
             assert multidim_index_five == (1, 2, 0)
+        elif order == "ZC":
+            assert multidim_index_five == (0, 0, 3)
+        elif order == "ZF":
+            assert multidim_index_five == (1, 1, 0)
 
         index_fifteen = 15
         multidim_index_fifteen = index_to_multidim_index(
@@ -49,6 +52,10 @@ def test_index_to_multidim_index_and_back():
             assert multidim_index_fifteen == (1, 1, 0)
         elif order == "F":
             assert multidim_index_fifteen == (1, 3, 1)
+        elif order == "ZC":
+            assert multidim_index_fifteen == (0, 3, 3)
+        elif order == "ZF":
+            assert multidim_index_fifteen == (1, 3, 1)
 
 
 def test_all_index_to_multidim_index_and_back():
@@ -56,7 +63,6 @@ def test_all_index_to_multidim_index_and_back():
     for order in ["C", "F", "ZC", "ZF"]:
         for index in range(np.prod(extents)):
             multidim_index = index_to_multidim_index(index, extents, order=order)
-            print(order, index, multidim_index)
             assert (
                 multidim_index_to_index(multidim_index, extents, order=order) == index
             )

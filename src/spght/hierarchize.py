@@ -6,7 +6,7 @@ import spght.data_structures as data_structures
 import pywt
 from typing import Sequence
 
-from spght.linearization import level_from_extent
+from spght.linearize import level_from_extent
 from spght.wavelets import half_haar
 
 
