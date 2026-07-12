@@ -140,7 +140,7 @@ def indices_to_multidim_indices(
             masks = _build_masks_zf(tuple(extents))
         else:
             raise ValueError(f"Unsupported order: {order}")
-        multidim = _decode(idx, masks)
+        multidim = _decode(idx, masks)  # type: ignore
 
     return multidim
 
@@ -181,7 +181,7 @@ def multidim_indices_to_indices(
             masks = _build_masks_zf(tuple(extents))
         else:
             raise ValueError(f"Unsupported order: {order}")
-        indices = _encode(idx, masks)
+        indices = _encode(idx, masks)  # type: ignore
 
     return indices
 
