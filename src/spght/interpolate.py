@@ -5,7 +5,7 @@ from typing import Sequence
 
 
 from spght.data_structures import SparseGridHierarchicalTensors, Subspace
-from spght.linearize import coordinate_to_multidim_index
+from spght.linearize import coordinates_to_multidim_indices
 from spght.wavelets import half_haar
 
 
@@ -60,14 +60,8 @@ def interpolate_subspace(
     ), "Only Haar wavelet is currently supported for interpolation"
 
     # interpolate using the scaling function at given coordinate
-    multidim_indices = (
-        coordinate_to_multidim_index(coordinate, coeffs.shape)
-        for coordinate in coordinates
-    )
-    value = np.fromiter(
-        (coeffs[multidim_index] for multidim_index in multidim_indices),
-        dtype=coeffs.dtype,
-    )
+    multidim_indices = coordinates_to_multidim_indices(coordinates, coeffs.shape)
+    value = coeffs[tuple(multidim_indices.T)]
     return value
 
 
