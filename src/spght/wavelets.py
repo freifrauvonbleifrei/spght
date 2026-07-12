@@ -1,7 +1,7 @@
 import pywt
 
 
-# we want wavelets where we implicitly assume that higher level 
+# we want wavelets where we implicitly assume that higher level
 # means smaller intervals (nesting)
 # -> half normalization instead of 1/sqrt(2) normalization
 
