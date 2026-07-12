@@ -92,7 +92,7 @@ if __name__ == "__main__":
     bbox_min, bbox_max, tight_shape = vdb_grid_extent(grid)
     max_level = levels_from_extent(tight_shape)
     shape = 2**max_level
-    nodal_values = np.full(shape, grid.background, dtype=np.float32)
+    nodal_values = np.full(shape, grid.background, dtype=np.float64)
     grid.copyToArray(nodal_values, ijk=bbox_min)
 
     # Hierarchize the tensor
