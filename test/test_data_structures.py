@@ -3,10 +3,12 @@ import pytest
 
 from spght.data_structures import (
     DenseTensor,
+    SparseGridHierarchicalTensors,
     SparseTensor,
     Subspace,
     TensorKind,
     make_tensor,
+    subspace_order_key,
 )
 
 
@@ -243,3 +245,53 @@ def test_hierarchize_produces_dense_tensors():
         assert not subspace.data.is_sparse  # dense until compress() sparsifies
         assert subspace.data.linear_values.ndim == 1  # linear storage invariant
         assert tuple(subspace.data.shape) == tuple(subspace.extents)
+
+
+def test_subspaces_canonically_ordered():
+    def one_value_subspace():
+        return Subspace(
+            extents=(1, 1),
+            precision_bits=64,
+            data=DenseTensor.from_dense(np.ones((1, 1))),
+        )
+
+    shuffled_levels = [(2, 2), (0, 1), (2, 0), (0, 0), (1, 1), (0, 2), (1, 0)]
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=2,
+        max_level=(2, 2),
+        subspaces={level: one_value_subspace() for level in shuffled_levels},
+    )
+    # ascending level sum, ties broken lexicographically
+    assert list(tensors.subspaces.keys()) == [
+        (0, 0),
+        (0, 1),
+        (1, 0),
+        (0, 2),
+        (1, 1),
+        (2, 0),
+        (2, 2),
+    ]
+
+    # add_subspace re-establishes the canonical order
+    tensors.add_subspace((1, 2), one_value_subspace())
+    assert list(tensors.subspaces.keys()) == [
+        (0, 0),
+        (0, 1),
+        (1, 0),
+        (0, 2),
+        (1, 1),
+        (2, 0),
+        (1, 2),
+        (2, 2),
+    ]
+
+
+def test_hierarchize_subspaces_canonically_ordered():
+    from spght.hierarchize import hierarchize
+
+    nodal_values = np.random.default_rng(4).random((4, 2, 4))
+    hierarchical_tensors = hierarchize(nodal_values)
+    keys = list(hierarchical_tensors.subspaces.keys())
+    assert keys == sorted(keys, key=subspace_order_key)
+    assert keys[0] == (0, 0, 0)  # coarsest first
+    assert keys[-1] == hierarchical_tensors.max_level  # finest last

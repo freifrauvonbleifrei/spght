@@ -8,7 +8,7 @@ from enum import IntEnum
 import numpy as np
 import numpy.typing as npt
 from pathlib import Path
-from typing import BinaryIO, ClassVar, Iterator, cast
+from typing import BinaryIO, ClassVar, Iterator, Sequence, cast
 
 from spght.linearize import (
     IndexLike,
@@ -517,6 +517,13 @@ class Subspace:
             )
 
 
+def subspace_order_key(level: Sequence[int]) -> tuple[int, tuple[int, ...]]:
+    """Canonical subspace ordering: ascending level sum (coarse to fine),
+    ties broken lexicographically (dimension 0 most significant)."""
+    level_tuple = tuple(level)
+    return (sum(level_tuple), level_tuple)
+
+
 @dataclass(slots=True)
 class SparseGridHierarchicalTensors:
     magic = FormatMagic
@@ -534,6 +541,13 @@ class SparseGridHierarchicalTensors:
                 raise ValueError(
                     "subspace extents dimensionality does not match container"
                 )
+        self._sort_subspaces()
+
+    def _sort_subspaces(self) -> None:
+        """Restore the canonical (level sum, lexicographic) subspace order."""
+        self.subspaces = dict(
+            sorted(self.subspaces.items(), key=lambda item: subspace_order_key(item[0]))
+        )
 
     def add_subspace(self, level: tuple[int, ...], subspace: Subspace) -> None:
         if len(level) != self.dimensions:
@@ -541,6 +555,7 @@ class SparseGridHierarchicalTensors:
         if len(self.max_level) != self.dimensions:
             raise ValueError("max_level dimensionality does not match container")
         self.subspaces[level] = subspace
+        self._sort_subspaces()
 
 
 def open_file(path: str | Path, mode: str = "rb") -> BinaryIO:

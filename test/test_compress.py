@@ -109,6 +109,16 @@ def test_compress_always_keeps_lmin():
     assert compressed.max_level == (0, 0)
 
 
+def test_compress_preserves_canonical_order():
+    from spght.data_structures import subspace_order_key
+
+    rng = np.random.default_rng(5)
+    hierarchical = hierarchize(rng.random((8, 8)))
+    compressed = compress(hierarchical, epsilon=0.05)
+    keys = list(compressed.subspaces.keys())
+    assert keys == sorted(keys, key=subspace_order_key)
+
+
 def test_compress_partial_error_bounded():
     rng = np.random.default_rng(3)
     level = [5, 5, 5]
