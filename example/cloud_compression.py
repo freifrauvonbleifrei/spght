@@ -5,11 +5,7 @@ from os.path import basename, getsize, splitext
 
 import openvdb as vdb
 
-from spght.compress import compress
-from spght.hierarchize import hierarchize
-from spght.interpolate import interpolate
-from spght.linearize import midpoint_coordinates_from_level
-from spght.data_structures import SparseGridHierarchicalTensors
+import spght
 
 
 def vdb_grid_extent(grid) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -25,14 +21,14 @@ def levels_from_extent(extent: np.ndarray) -> np.ndarray:
 
 
 def spght_to_vdb_grid(
-    hierarchical_tensors: SparseGridHierarchicalTensors,
+    hierarchical_tensors: spght.SparseGridHierarchicalTensors,
     bbox_min: np.ndarray,
     field_name: str = "density",
 ) -> vdb.FloatGrid:
     """Interpolate a sparse grid hierarchical tensor onto an OpenVDB grid."""
     # Cell-midpoint coordinates of the full tensor in the [0, 1]^d unit domain.
-    midpoints = midpoint_coordinates_from_level(hierarchical_tensors.max_level)
-    nodal_values = interpolate(midpoints, hierarchical_tensors)
+    midpoints = spght.midpoint_coordinates_from_level(hierarchical_tensors.max_level)
+    nodal_values = spght.interpolate(midpoints, hierarchical_tensors)
 
     # Create a new OpenVDB grid and copy the interpolated values into it
     grid = vdb.FloatGrid()
@@ -77,7 +73,7 @@ if __name__ == "__main__":
     grid.copyToArray(nodal_values, ijk=bbox_min)
 
     # Hierarchize the tensor
-    hierarchical_values = hierarchize(nodal_values)
+    hierarchical_values = spght.hierarchize(nodal_values)
 
     def report(label: str, tensors) -> None:
         num_bytes = sum(s.num_bytes for s in tensors.subspaces.values())
@@ -90,7 +86,7 @@ if __name__ == "__main__":
     report("Previously", hierarchical_values)
     # partial compression: surviving coefficients per subspace are kept and
     # stored sparsely where that pays off
-    compressed_values = compress(hierarchical_values, epsilon=args.epsilon)
+    compressed_values = spght.compress(hierarchical_values, epsilon=args.epsilon)
     report("After compression", compressed_values)
 
     # write the compressed tensor to a .spght file
@@ -100,7 +96,7 @@ if __name__ == "__main__":
     print(f"Wrote {spght_file} ({getsize(spght_file) / 2**20:.2f} MiB)")
 
     # re-interpolate onto OpenVDB grid, from the file we just wrote
-    loaded_values = SparseGridHierarchicalTensors.read(spght_file)
+    loaded_values = spght.read(spght_file)
     spght_openvdb_grid = spght_to_vdb_grid(
         loaded_values, bbox_min, field_name="density"
     )
