@@ -58,10 +58,6 @@ class Tensor(abc.ABC):
         return int(np.prod(self.shape)) if self.shape else 1
 
     @property
-    def density(self) -> float:
-        return self.nnz / self.size if self.size else 0.0
-
-    @property
     def is_sparse(self) -> bool:
         """Derived from kind: anything that stores an index list is sparse."""
         return self.kind != TensorKind.FULL
