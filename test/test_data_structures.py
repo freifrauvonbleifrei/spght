@@ -9,21 +9,19 @@ from spght.data_structures import (
     make_tensor,
 )
 
-ALL_ORDERS = ["C", "F", "ZC", "ZF"]
 
-
-def test_dense_from_dense_roundtrip_all_orders():
+@pytest.mark.parametrize("order", ["C", "F", "ZC", "ZF"])
+def test_dense_from_dense_roundtrip(order):
     rng = np.random.default_rng(0)
     # power-of-two extents so that Z orders are valid too
     for shape in [(4,), (4, 2), (2, 4, 2)]:
         array = rng.random(shape)
-        for order in ALL_ORDERS:
-            t = DenseTensor.from_dense(array, order=order)
-            assert t.shape == shape
-            assert not t.is_sparse
-            assert t.linear_values.ndim == 1
-            assert t.linear_values.shape[0] == array.size
-            assert np.array_equal(t.to_dense(), array)
+        t = DenseTensor.from_dense(array, order=order)
+        assert t.shape == shape
+        assert not t.is_sparse
+        assert t.linear_values.ndim == 1
+        assert t.linear_values.shape[0] == array.size
+        assert np.array_equal(t.to_dense(), array)
 
 
 def test_dense_linear_layout_c_and_f():
@@ -48,14 +46,12 @@ def test_dense_linear_layout_z_2x2():
     )
 
 
-def test_z_orders_require_power_of_two_extents():
-    array = np.zeros((3, 2))
-    for order in ["ZC", "ZF"]:
-        with pytest.raises(ValueError):
-            DenseTensor.from_dense(array, order=order)
-    # C and F are fine with arbitrary extents
-    DenseTensor.from_dense(array, order="C")
-    DenseTensor.from_dense(array, order="F")
+@pytest.mark.parametrize("order", ["C", "F", "ZC", "ZF"])
+def test_z_orders_support_arbitrary_extents(order):
+    array = np.arange(3 * 2 * 5, dtype=np.float64).reshape(3, 2, 5)
+    t = DenseTensor.from_dense(array, order=order)
+    assert np.array_equal(np.sort(t.linear_values), np.sort(array.ravel()))
+    assert np.array_equal(t.to_dense(), array)
 
 
 def test_dense_get_set():
@@ -74,21 +70,21 @@ def test_dense_get_set():
         assert np.array_equal(t.linear_values[:2], np.array([-2.0, -3.0]))
 
 
-def test_sparse_from_dense_roundtrip_all_orders():
+@pytest.mark.parametrize("order", ["C", "F", "ZC", "ZF"])
+def test_sparse_from_dense_roundtrip(order):
     rng = np.random.default_rng(1)
     shape = (4, 8, 2)
     array = np.zeros(shape)
     # sprinkle a few nonzeros
     for _ in range(6):
         array[tuple(rng.integers(0, s) for s in shape)] = rng.random() + 0.1
-    for order in ALL_ORDERS:
-        t = SparseTensor.from_dense(array, order=order)
-        assert t.is_sparse
-        assert t.nnz == np.count_nonzero(array)
-        assert np.array_equal(t.to_dense(), array)
-        # keys are sorted and match values
-        assert np.all(np.diff(t.linear_indices) > 0)
-        assert t.linear_indices.shape == t.linear_values.shape
+    t = SparseTensor.from_dense(array, order=order)
+    assert t.is_sparse
+    assert t.nnz == np.count_nonzero(array)
+    assert np.array_equal(t.to_dense(), array)
+    # keys are sorted and match values
+    assert np.all(np.diff(t.linear_indices) > 0)
+    assert t.linear_indices.shape == t.linear_values.shape
 
 
 def test_sparse_get_set_semantics():
@@ -161,22 +157,22 @@ def test_out_of_bounds_indices_raise():
             t[-1, 0]  # negative indices unsupported
 
 
-def test_nonzero_items_sorted_and_correct():
+@pytest.mark.parametrize("order", ["C", "F", "ZC", "ZF"])
+def test_nonzero_items_sorted_and_correct(order):
     array = np.zeros((4, 4))
     array[0, 1] = 1.0
     array[2, 3] = 2.0
     array[3, 0] = 3.0
-    for order in ALL_ORDERS:
-        for t in [
-            DenseTensor.from_dense(array, order=order),
-            SparseTensor.from_dense(array, order=order),
-        ]:
-            items = list(t.nonzero_items())
-            assert {(c, v) for c, v in items} == {
-                ((0, 1), 1.0),
-                ((2, 3), 2.0),
-                ((3, 0), 3.0),
-            }
+    for t in [
+        DenseTensor.from_dense(array, order=order),
+        SparseTensor.from_dense(array, order=order),
+    ]:
+        items = list(t.nonzero_items())
+        assert {(c, v) for c, v in items} == {
+            ((0, 1), 1.0),
+            ((2, 3), 2.0),
+            ((3, 0), 3.0),
+        }
 
 
 def test_make_tensor_density_pick():

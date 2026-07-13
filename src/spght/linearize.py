@@ -24,6 +24,23 @@ IndexLike = Union[int, np.integer, Sequence[int], MultiIndices]
 Coordinates = Union[Sequence[Sequence[float]], npt.NDArray[np.floating]]
 
 
+def _all_powers_of_two(extents: Sequence[int]) -> bool:
+    return all(e >= 1 and (e & (e - 1)) == 0 for e in extents)
+
+
+def _check_multidim_bounds(idx: npt.NDArray[np.int64], extents: Sequence[int]) -> None:
+    if np.any(idx < 0) or np.any(idx >= np.asarray(extents, dtype=np.int64)):
+        raise IndexError(f"Multidim index out of bounds for extents {tuple(extents)}")
+
+
+def _check_linear_bounds(linear: npt.NDArray[np.int64], extents: Sequence[int]) -> None:
+    if np.any(linear < 0) or np.any(linear >= int(np.prod(extents))):
+        raise IndexError(
+            f"Linear index out of bounds for extents {tuple(extents)} "
+            f"(size {int(np.prod(extents))})"
+        )
+
+
 ## Z-order curves are similar to ALTO linearization
 @lru_cache
 def _build_masks(extent, order):
@@ -107,6 +124,81 @@ def _decode(
     return out
 
 
+def _round_robin(extents: Sequence[int], order: Order) -> tuple[int, ...]:
+    if order == "ZC":
+        return tuple(range(len(extents)))
+    elif order == "ZF":
+        return tuple(reversed(range(len(extents))))
+    raise ValueError(f"Unsupported order: {order}")
+
+
+def _bisect_encode(
+    idx: npt.NDArray[np.int64],
+    extents: Sequence[int],
+    dim_rotation: tuple[int, ...],
+) -> npt.NDArray[np.int64]:
+    """Bijective Z-order for arbitrary extents: visit dimensions round-robin
+    like _build_masks (a dimension drops out after ceil(log2(extent)) rounds),
+    but split the dimension's current extent into ceil/floor halves instead of
+    consuming a bit; a cell in the right half is preceded by all cells of the
+    left half. For power-of-two extents this reproduces the mask-based order
+    exactly, so those shapes take the faster _encode/_decode path.
+
+    idx: (n, d) array of multidim indices."""
+    idx = idx.copy()
+    num_indices = idx.shape[0]
+    current = np.broadcast_to(np.asarray(extents, dtype=np.int64), idx.shape).copy()
+    total = np.full(num_indices, int(np.prod(extents)), dtype=np.int64)
+    pos = np.zeros(num_indices, dtype=np.int64)
+    for _ in range(max(level_from_extent(e) for e in extents)):
+        for n in dim_rotation:
+            col = current[:, n]
+            splittable = col > 1
+            if not splittable.any():
+                continue
+            left = (col + 1) >> 1  # ceil half
+            rest = total // col  # cells per unit slab of dimension n
+            go_right = splittable & (idx[:, n] >= left)
+            pos += np.where(go_right, left * rest, 0)
+            idx[:, n] -= np.where(go_right, left, 0)
+            new_col = np.where(splittable, np.where(go_right, col - left, left), col)
+            current[:, n] = new_col
+            total = new_col * rest
+    return pos
+
+
+def _bisect_decode(
+    pos: npt.NDArray[np.int64],
+    extents: Sequence[int],
+    dim_rotation: tuple[int, ...],
+) -> npt.NDArray[np.int64]:
+    """Inverse of _bisect_encode. Returns one multidim index per row."""
+    pos = pos.copy()
+    num_indices = pos.shape[0]
+    num_dims = len(extents)
+    current = np.broadcast_to(
+        np.asarray(extents, dtype=np.int64), (num_indices, num_dims)
+    ).copy()
+    total = np.full(num_indices, int(np.prod(extents)), dtype=np.int64)
+    out = np.zeros((num_indices, num_dims), dtype=np.int64)
+    for _ in range(max(level_from_extent(e) for e in extents)):
+        for n in dim_rotation:
+            col = current[:, n]
+            splittable = col > 1
+            if not splittable.any():
+                continue
+            left = (col + 1) >> 1
+            rest = total // col
+            left_size = left * rest
+            go_right = splittable & (pos >= left_size)
+            pos -= np.where(go_right, left_size, 0)
+            out[:, n] += np.where(go_right, left, 0)
+            new_col = np.where(splittable, np.where(go_right, col - left, left), col)
+            current[:, n] = new_col
+            total = new_col * rest
+    return out
+
+
 def _compute_strides(extents: Sequence[int], order: Order) -> list[int]:
     """Per-dimension linear-index strides for row-major ('C') or column-major ('F') order."""
     num_dims = len(extents)
@@ -127,10 +219,12 @@ def indices_to_multidim_indices(
     extents: tuple[int, ...],
     order: Order,
 ) -> npt.NDArray[np.int64]:
-    """Convert multiple linear indices to multi-dimensional indices."""
+    """Convert multiple linear indices to multi-dimensional indices.
+    Linear indices outside [0, prod(extents)) raise IndexError."""
     num_dims = len(extents)
     idx: npt.NDArray[np.int64] = np.array(indices, dtype=np.int64).reshape(-1)
     n = idx.shape[0]
+    _check_linear_bounds(idx, extents)
 
     multidim: npt.NDArray[np.int64] = np.zeros(shape=(n, num_dims), dtype=np.int64)
 
@@ -138,14 +232,17 @@ def indices_to_multidim_indices(
         strides = _compute_strides(extents, order)
         for i in range(num_dims):
             multidim[:, i] = (idx // strides[i]) % extents[i]
-    else:
-        if order == "ZC":
-            masks = _build_masks_zc(tuple(extents))
-        elif order == "ZF":
-            masks = _build_masks_zf(tuple(extents))
+    elif order in ("ZC", "ZF"):
+        if _all_powers_of_two(extents):
+            if order == "ZC":
+                masks = _build_masks_zc(tuple(extents))
+            else:
+                masks = _build_masks_zf(tuple(extents))
+            multidim = _decode(idx, masks)  # type: ignore
         else:
-            raise ValueError(f"Unsupported order: {order}")
-        multidim = _decode(idx, masks)  # type: ignore
+            multidim = _bisect_decode(idx, extents, _round_robin(extents, order))
+    else:
+        raise ValueError(f"Unsupported order: {order}")
 
     return multidim
 
@@ -168,25 +265,30 @@ def multidim_indices_to_indices(
     extents: Sequence[int],
     order: Order,
 ) -> npt.NDArray[np.int64]:
-    """Convert multiple multi-dimensional indices to linear indices."""
+    """Convert multiple multi-dimensional indices to linear indices.
+    Indices outside [0, extents) raise IndexError."""
     num_dims = len(extents)
 
     idx = np.array(multidim_indices, dtype=np.int64)
     idx = reshape_to_nxd(idx, num_dims)
+    _check_multidim_bounds(idx, extents)
 
     if order in ("C", "F"):
         strides = _compute_strides(extents, order)
         indices = np.zeros(idx.shape[0], dtype=np.int64)
         for i in range(num_dims):
             indices += idx[:, i] * strides[i]
-    else:
-        if order == "ZC":
-            masks = _build_masks_zc(tuple(extents))
-        elif order == "ZF":
-            masks = _build_masks_zf(tuple(extents))
+    elif order in ("ZC", "ZF"):
+        if _all_powers_of_two(extents):
+            if order == "ZC":
+                masks = _build_masks_zc(tuple(extents))
+            else:
+                masks = _build_masks_zf(tuple(extents))
+            indices = _encode(idx, masks)  # type: ignore
         else:
-            raise ValueError(f"Unsupported order: {order}")
-        indices = _encode(idx, masks)  # type: ignore
+            indices = _bisect_encode(idx, extents, _round_robin(extents, order))
+    else:
+        raise ValueError(f"Unsupported order: {order}")
 
     return indices
 

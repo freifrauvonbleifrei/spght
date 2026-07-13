@@ -32,17 +32,6 @@ class TensorKind(IntEnum):
     # future, e.g.: INTERVALS = 3  (runs of linear indices)
 
 
-def _validate_shape_for_order(shape: tuple[int, ...], order: Order) -> None:
-    """Z-order linearization interleaves bits, so it is only bijective for
-    power-of-two extents; C/F work for arbitrary extents."""
-    if order in ("ZC", "ZF"):
-        for e in shape:
-            if e < 1 or (e & (e - 1)) != 0:
-                raise ValueError(
-                    f"order {order!r} requires power-of-two extents, got {shape}"
-                )
-
-
 class Tensor(abc.ABC):
     """Logical n-d array stored as a linear buffer in `order` linearization.
 
@@ -199,7 +188,6 @@ class DenseTensor(Tensor):
     kind = TensorKind.FULL
 
     def __init__(self, flat: npt.NDArray, shape: tuple[int, ...], order: Order = "C"):
-        _validate_shape_for_order(shape, order)
         total = int(np.prod(shape)) if shape else 1
         if flat.ndim != 1 or flat.shape[0] != total:
             raise ValueError(
@@ -216,7 +204,6 @@ class DenseTensor(Tensor):
         """Linearize an n-d array into the given order."""
         array = np.asarray(array)
         shape = array.shape
-        _validate_shape_for_order(shape, order)
         if order == "C":
             flat = array.ravel(order="C").copy()
         elif order == "F":
@@ -311,7 +298,6 @@ class SparseTensor(Tensor):
         )
 
     def _init_from_linear(self, keys, values, shape, order, pending_limit) -> None:
-        _validate_shape_for_order(shape, order)
         if keys.shape != values.shape or keys.ndim != 1:
             raise ValueError(
                 f"Expected matching 1-D keys and values, got {keys.shape} and {values.shape}"
