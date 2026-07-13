@@ -219,7 +219,7 @@ def test_subspace_holds_tensor():
     assert subspace.kind == TensorKind.FULL
     assert not subspace.is_sparse
     assert subspace.num_bytes == dense.nbytes
-    assert np.array_equal(subspace.values, array)  # backward-compat shim
+    assert np.array_equal(subspace.data, array)
 
     sparse_sub = Subspace(
         extents=(2, 4),

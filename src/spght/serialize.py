@@ -5,13 +5,15 @@ Layout (little endian throughout):
 File header:
     magic                  33 bytes, FormatMagic
     version                2 x uint8 (major, minor)
-    num dimensions         uint8
+    num dimensions         uint16
     num subspaces          uint64
     max level              uint8 per dimension
     subspace table         one entry per subspace, in the canonical
                            (level sum, lexicographic) order:
                                level vector    uint8 per dimension
                                record offset   uint64, absolute from file start
+    header checksum        uint32, crc32 of all preceding header bytes
+                           (magic through subspace table), verified on read
 
 The subspace table makes each record independently addressable.
 Ordering the subspaces makes the format "scalable" in the JPEG2000 sense.
@@ -59,7 +61,8 @@ FormatVersion: tuple[int, int] = (0, 1)
 _ORDER_TO_CODE: dict[Order, int] = {"C": 0, "F": 1, "ZC": 2, "ZF": 3}
 _CODE_TO_ORDER: dict[int, Order] = {c: o for o, c in _ORDER_TO_CODE.items()}
 
-_HEADER = struct.Struct("<33sBBBQ")  # magic, major, minor, ndim, num subspaces
+_HEADER = struct.Struct("<33sBBHQ")  # magic, major, minor, ndim, num subspaces
+_HEADER_CRC = struct.Struct("<I")  # closes the header, covers all bytes before it
 _RECORD = struct.Struct("<BBcBHHBdddQQI")  # see subspace record layout above
 
 
@@ -191,6 +194,8 @@ def write(
 ) -> None:
     """Write the hierarchy to a path or binary stream in the v0.1 layout."""
     num_dims = tensors.dimensions
+    if not 1 <= num_dims <= 65535:
+        raise ValueError(f"Number of dimensions must fit in uint16, got {num_dims}")
     for level in (*tensors.subspaces.keys(), tensors.max_level):
         if any(not 0 <= single_level <= 255 for single_level in level):
             raise ValueError(f"Levels must fit in one byte each, got {level}")
@@ -199,7 +204,9 @@ def write(
         _encode_record(subspace, num_dims) for subspace in tensors.subspaces.values()
     ]
     table_entry = struct.Struct(f"<{num_dims}BQ")
-    header_size = _HEADER.size + num_dims + len(records) * table_entry.size
+    header_size = (
+        _HEADER.size + num_dims + len(records) * table_entry.size + _HEADER_CRC.size
+    )
 
     table = b""
     offset = header_size
@@ -207,11 +214,15 @@ def write(
         table += table_entry.pack(*level, offset)
         offset += len(record)
 
+    header = (
+        _HEADER.pack(FormatMagic, *FormatVersion, num_dims, len(records))
+        + struct.pack(f"<{num_dims}B", *tensors.max_level)
+        + table
+    )
     stream, should_close = _open_stream(target, "wb")
     try:
-        stream.write(_HEADER.pack(FormatMagic, *FormatVersion, num_dims, len(records)))
-        stream.write(struct.pack(f"<{num_dims}B", *tensors.max_level))
-        stream.write(table)
+        stream.write(header)
+        stream.write(_HEADER_CRC.pack(zlib.crc32(header)))
         for record in records:
             stream.write(record)
     finally:
@@ -223,9 +234,8 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
     """Read a hierarchy from a path or (seekable) binary stream."""
     stream, should_close = _open_stream(source, "rb")
     try:
-        magic, major, minor, num_dims, num_subspaces = _HEADER.unpack(
-            _read_exactly(stream, _HEADER.size)
-        )
+        fixed_header = _read_exactly(stream, _HEADER.size)
+        magic, major, minor, num_dims, num_subspaces = _HEADER.unpack(fixed_header)
         if magic != FormatMagic:
             raise ValueError("Not a spght file (magic string mismatch)")
         if (major, minor) != FormatVersion:
@@ -233,12 +243,21 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
                 f"Unsupported format version {major}.{minor}, "
                 f"expected {FormatVersion[0]}.{FormatVersion[1]}"
             )
-        max_level = struct.unpack(f"<{num_dims}B", _read_exactly(stream, num_dims))
 
         table_entry = struct.Struct(f"<{num_dims}BQ")
+        header_rest = _read_exactly(
+            stream, num_dims + num_subspaces * table_entry.size
+        )
+        (header_crc,) = _HEADER_CRC.unpack(_read_exactly(stream, _HEADER_CRC.size))
+        if zlib.crc32(fixed_header + header_rest) != header_crc:
+            raise ValueError("File header failed its checksum")
+
+        max_level = struct.unpack(f"<{num_dims}B", header_rest[:num_dims])
         table: list[tuple[tuple[int, ...], int]] = []
-        for _ in range(num_subspaces):
-            entry = table_entry.unpack(_read_exactly(stream, table_entry.size))
+        for i in range(num_subspaces):
+            entry = table_entry.unpack_from(
+                header_rest, num_dims + i * table_entry.size
+            )
             table.append((entry[:-1], entry[-1]))
 
         subspaces: dict[tuple[int, ...], Subspace] = {}

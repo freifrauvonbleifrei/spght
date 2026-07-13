@@ -171,6 +171,30 @@ def test_read_rejects_unsupported_version():
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
 
 
+def test_read_detects_corrupted_header():
+    corrupted = _valid_file_bytes()
+    # byte 45 is the first max_level byte, i.e. inside the checksummed
+    # header but past the magic/version fields that are checked first
+    corrupted[45] ^= 0xFF
+    with pytest.raises(ValueError, match="header"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_many_dimensions_roundtrip():
+    # the format allows up to 65535 dimensions (uint16); numpy arrays cap at
+    # 64 axes, so an EMPTY subspace exercises a 300-dimensional file
+    dims = 300
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=dims,
+        max_level=(0,) * dims,
+        subspaces={(0,) * dims: Subspace(extents=(1,) * dims, precision_bits=64)},
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    _assert_equal_containers(tensors, SparseGridHierarchicalTensors.read(buffer))
+
+
 def test_read_detects_corrupted_data():
     corrupted = _valid_file_bytes()
     corrupted[-1] ^= 0xFF  # last byte belongs to the last subspace's values

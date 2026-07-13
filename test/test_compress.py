@@ -28,8 +28,8 @@ def test_compress_small_checker():
     assert compressed_values.dimensions == 2
     assert compressed_values.max_level == (1, 1)
     assert len(compressed_values.subspaces) == 2
-    assert compressed_values.subspaces[(0, 0)].values == [0.5]
-    assert compressed_values.subspaces[(1, 1)].values == [0.5]
+    assert np.allclose(compressed_values.subspaces[(0, 0)].data, [0.5])
+    assert np.allclose(compressed_values.subspaces[(1, 1)].data, [0.5])
 
 
 def test_compress_partial_lossless_by_default():

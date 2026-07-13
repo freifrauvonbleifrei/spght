@@ -35,10 +35,11 @@ General properties:
 | 0 | 33 | bytes | magic string: ASCII `"sparse grid hierarchical tensors"` followed by one NUL byte |
 | 33 | 1 | uint8 | format version, major (currently 0) |
 | 34 | 1 | uint8 | format version, minor (currently 1) |
-| 35 | 1 | uint8 | number of dimensions `d` |
-| 36 | 8 | uint64 | number of subspaces `n` |
-| 44 | `d` | uint8 each | maximum level per dimension |
-| 44 + `d` | `n * (d + 8)` | table entries | subspace table (see below) |
+| 35 | 2 | uint16 | number of dimensions `d` (1 to 65535) |
+| 37 | 8 | uint64 | number of subspaces `n` |
+| 45 | `d` | uint8 each | maximum level per dimension |
+| 45 + `d` | `n * (d + 8)` | table entries | subspace table (see below) |
+| 45 + `d` + `n * (d + 8)` | 4 | uint32 | CRC-32 (zlib) checksum of all preceding header bytes, verified on read |
 
 Each **subspace table** entry is:
 
@@ -118,9 +119,11 @@ the linear buffer (and what the `LINEAR` indices refer to):
 ### Integrity and limits
 
 - A reader must verify the magic string, reject unknown major/minor
-  versions, and verify each record's CRC-32 before trusting its blob.
-- Levels and the number of dimensions are stored as single bytes: at most
-  255 each. Extents and subspace counts are uint64.
+  versions, verify the header CRC-32 before trusting the subspace table, and
+  verify each record's CRC-32 before trusting its blob.
+- The number of dimensions is a uint16: 1 to 65535. Levels are stored as
+  single bytes: at most 255 per dimension. Extents and subspace counts are
+  uint64.
 - `precision_bits` is carried per subspace but not yet enforced as a storage
   width; values are stored at their dtype's width. `compression` is reserved
   and must currently be 0.

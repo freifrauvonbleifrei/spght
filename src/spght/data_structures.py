@@ -16,6 +16,8 @@ class Subspace:
     """Describe one logical subspace in memory and on disk."""
 
     extents: tuple[int, ...]
+    # informational in v0.1: values are stored at their dtype's width,
+    # a custom precision is not (yet) enforced
     precision_bits: int
     data: Tensor | None = None
     # three quantization parameters, reserved for future use
@@ -23,7 +25,6 @@ class Subspace:
     quantization_offset: float = 0.0
     quantization_parameter: float = 0.0
     padding_bits: int = 0
-    checksum: int = 0
     compression: int = 0
 
     @property
@@ -38,11 +39,6 @@ class Subspace:
     @property
     def is_sparse(self) -> bool:
         return self.data.is_sparse if self.data is not None else False
-
-    @property
-    def values(self) -> npt.NDArray | None:
-        """Backward-compatible n-d view of the data (a fresh copy)."""
-        return self.data.to_dense() if self.data is not None else None
 
     @property
     def num_bytes(self) -> int:
