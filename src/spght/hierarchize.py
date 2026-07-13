@@ -1,5 +1,6 @@
 # Hierarchize a multi-dimensional function on a structured grid using the unidirectional principle.
 
+import itertools
 import numpy as np
 import numpy.typing as npt
 import spght.data_structures as data_structures
@@ -36,12 +37,12 @@ def hierarchize(
             # TODO add lmin
         modified_values = updated_values
 
-    # construct a matching list of subspace levels: tensor product of 1D levels from 0 to level[d] for each dimension d
-    subspace_levels_per_dim = []
-    for d in range(num_dim):
-        subspace_levels_per_dim.append(list(range(level[d] + 1)))
-    subspace_levels = np.array(np.meshgrid(*subspace_levels_per_dim)).T.reshape(
-        -1, num_dim
+    # construct a matching list of subspace levels: tensor product of 1D levels
+    # from 0 to level[d] for each dimension d. The order must match the order in
+    # which `modified_values` was built by the nested wavedec loop above, i.e.
+    # C-order.
+    subspace_levels = list(
+        itertools.product(*(range(level[d] + 1) for d in range(num_dim)))
     )
 
     return data_structures.SparseGridHierarchicalTensors(
