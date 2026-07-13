@@ -1,5 +1,9 @@
 # spght: Sparse Grid Hierarchical Tensors
 
+[![Python Lint and Test](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-lint-and-test.yml/badge.svg)](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-lint-and-test.yml)
+[![WDAS Cloud Compression](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-example.yml/badge.svg)](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-example.yml)
+[![Coverage](./coverage.svg)](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-coverage.yml)
+
 pronounced "spaghetti".
 
 spght defines a memory and storage representation of sparse grids /
@@ -8,6 +12,55 @@ hierarchical wavelet coefficients. A function on a structured grid is
 vector), optionally `compress`ed by dropping small coefficients, evaluated
 with `interpolate`, and written to / read from the binary file format
 documented below.
+
+## Installation
+
+spght requires Python >= 3.10; its dependencies (`numpy`, `PyWavelets`,
+`bitarray`) are installed automatically. Install straight from GitHub:
+
+```shell
+pip install git+https://github.com/freifrauvonbleifrei/spght.git
+```
+
+or, from a local checkout (editable, for development):
+
+```shell
+git clone https://github.com/freifrauvonbleifrei/spght.git
+cd spght
+pip install -e .
+```
+
+Run the tests with `pip install pytest && pytest test/`.
+
+## Usage
+
+The whole pipeline is reachable from the top-level namespace:
+
+```python
+import numpy as np
+import spght
+
+# a function sampled on a structured grid; extents should be powers of two
+# (or use hierarchize(..., deviate_from_power_of_two=...) for e.g. 2**l + 1)
+nodal_values = np.random.default_rng(0).random((64, 64, 64))
+
+# decompose into hierarchical subspaces, one coefficient block per level vector
+tensors = spght.hierarchize(nodal_values)
+
+# drop coefficients with |coefficient| <= epsilon
+compressed = spght.compress(tensors, epsilon=0.01)
+
+# write to / read from the .spght binary format (path or binary stream);
+# equivalently: compressed.write(...) and spght.SparseGridHierarchicalTensors.read(...)
+spght.write(compressed, "function.spght")
+loaded = spght.read("function.spght")
+
+# point-evaluate on the unit hypercube [0, 1]^d
+value = spght.interpolate(np.array([0.3, 0.6, 0.5]), loaded)
+```
+
+For a complete worked example — compressing the WDAS cloud dataset and
+evaluating the reconstruction error — see [`example/README.md`](example/README.md).
 
 ## File format, version 0.1
 
@@ -34,12 +87,13 @@ General properties:
 |---|---|---|---|
 | 0 | 33 | bytes | magic string: ASCII `"sparse grid hierarchical tensors"` followed by one NUL byte |
 | 33 | 1 | uint8 | format version, major (currently 0) |
-| 34 | 1 | uint8 | format version, minor (currently 1) |
+| 34 | 1 | uint8 | format version, minor (currently 2) |
 | 35 | 2 | uint16 | number of dimensions `d` (1 to 65535) |
 | 37 | 8 | uint64 | number of subspaces `n` |
 | 45 | `d` | uint8 each | maximum level per dimension |
-| 45 + `d` | `n * (d + 8)` | table entries | subspace table (see below) |
-| 45 + `d` + `n * (d + 8)` | 4 | uint32 | CRC-32 (zlib) checksum of all preceding header bytes, verified on read |
+| 45 + `d` | `d` | uint8 each | minimum level per dimension (see *Scaling vs. detail subspaces*) |
+| 45 + 2`d` | `n * (d + 8)` | table entries | subspace table (see below) |
+| 45 + 2`d` + `n * (d + 8)` | 4 | uint32 | CRC-32 (zlib) checksum of all preceding header bytes, verified on read |
 
 Each **subspace table** entry is:
 
@@ -90,6 +144,22 @@ The blob content depends on the tensor kind:
   implicitly zero.
 
 Future kinds (e.g. interval/run-based sparsity) get new tensor-kind values.
+
+### Scaling vs. detail subspaces
+
+The minimum level (header) is where the wavelet cascade stops in each
+dimension. Subspace level labels are absolute: along dimension `d` they run
+from `min_level[d]` to `max_level[d]`, and
+
+- a subspace with `level[d] == min_level[d]` holds **scaling**
+  (approximation) coefficients along `d`, with extent `2^min_level[d]`;
+- a subspace with `level[d] > min_level[d]` holds **detail** (wavelet)
+  coefficients along `d`, with extent `2^(level[d] - 1)`.
+
+Scaling-ness is *defined* by this equality and not stored separately: for
+this format, a dimension being at its minimum level and holding scaling
+coefficients are the same thing. `min_level` of all zeros reproduces the
+classic full decomposition.
 
 ### Normalization / quantization (reserved)
 
