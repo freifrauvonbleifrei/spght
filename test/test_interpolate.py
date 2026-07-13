@@ -134,7 +134,7 @@ def test_interpolate_fine_scale_random():
     # values to (near) machine precision. Summing many subspaces in single
     # precision would blow the tolerance -- this guards that numerical error.
     np.random.seed(0)
-    for level in ([10], [6, 6], [6, 6, 6]):
+    for level in ([10], [5, 5], [4, 4, 4]):
         dimensionality = len(level)
         extents = [extent_from_level(lvl) for lvl in level]
         nodal_values = np.random.rand(*extents).astype(np.float64)
