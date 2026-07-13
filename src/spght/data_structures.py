@@ -65,18 +65,45 @@ def subspace_order_key(level: Sequence[int]) -> tuple[int, tuple[int, ...]]:
 class SparseGridHierarchicalTensors:
     dimensions: int
     max_level: tuple[int, ...]
-    # levels: tuple[int, ...]
+    # minimum level per dimension: where the wavelet cascade stops; along
+    # dimension d, subspaces with level[d] == min_level[d] hold scaling
+    # coefficients.
+    min_level: tuple[int, ...] = ()
     subspaces: dict[tuple[int, ...], Subspace] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if len(self.max_level) != self.dimensions:
+            raise ValueError("max_level dimensionality does not match container")
+        if self.min_level == ():
+            self.min_level = tuple(0 for _ in range(self.dimensions))
+        if len(self.min_level) != self.dimensions:
+            raise ValueError("min_level dimensionality does not match container")
+        if any(
+            minimum > maximum
+            for minimum, maximum in zip(self.min_level, self.max_level)
+        ):
+            raise ValueError(
+                f"min_level {self.min_level} exceeds max_level {self.max_level}"
+            )
         for k, v in self.subspaces.items():
             if len(k) != self.dimensions:
                 raise ValueError("subspace key dimensionality does not match container")
+            if any(level < minimum for level, minimum in zip(k, self.min_level)):
+                raise ValueError(f"subspace level {k} is below min_level")
             if len(v.extents) != self.dimensions:
                 raise ValueError(
                     "subspace extents dimensionality does not match container"
                 )
         self._sort_subspaces()
+
+    def scaling_dimensions(self, level: Sequence[int]) -> tuple[bool, ...]:
+        """Along which dimensions a subspace at `level` holds scaling
+        (approximation) coefficients: exactly those where the level equals
+        min_level; all finer levels hold detail coefficients."""
+        return tuple(
+            single_level == minimum
+            for single_level, minimum in zip(level, self.min_level)
+        )
 
     def _sort_subspaces(self) -> None:
         """Restore the canonical (level sum, lexicographic) subspace order."""
@@ -89,6 +116,11 @@ class SparseGridHierarchicalTensors:
             raise ValueError("subspace dimensionality does not match container")
         if len(self.max_level) != self.dimensions:
             raise ValueError("max_level dimensionality does not match container")
+        if any(
+            single_level < minimum
+            for single_level, minimum in zip(level, self.min_level)
+        ):
+            raise ValueError(f"subspace level {level} is below min_level")
         self.subspaces[level] = subspace
         self._sort_subspaces()
 

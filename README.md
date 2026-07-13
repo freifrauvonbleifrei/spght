@@ -62,7 +62,7 @@ value = spght.interpolate(np.array([0.3, 0.6, 0.5]), loaded)
 For a complete worked example — compressing the WDAS cloud dataset and
 evaluating the reconstruction error — see [`example/README.md`](example/README.md).
 
-## File format, version 0.1
+## File format, version 0.2
 
 One spght file stores one `SparseGridHierarchicalTensors` container: a set of
 subspaces, each identified by its level vector `l = (l_1, ..., l_d)` and
