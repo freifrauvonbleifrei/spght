@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Theresa Pollinger
+
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
 # spght: Sparse Grid Hierarchical Tensors
 
 [![Python Lint and Test](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-lint-and-test.yml/badge.svg)](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-lint-and-test.yml)
@@ -197,3 +203,10 @@ the linear buffer (and what the `LINEAR` indices refer to):
 - `precision_bits` is carried per subspace but not yet enforced as a storage
   width; values are stored at their dtype's width. `compression` is reserved
   and must currently be 0.
+
+## License
+
+The spght code is licensed under [Apache-2.0](LICENSES/Apache-2.0.txt);
+documentation and configuration files are [CC-BY-4.0](LICENSES/CC-BY-4.0.txt)
+or [CC0-1.0](LICENSES/CC0-1.0.txt) as marked. The repository follows the
+[REUSE](https://reuse.software/) license specification.

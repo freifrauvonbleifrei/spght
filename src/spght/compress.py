@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Theresa Pollinger
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from copy import deepcopy
 from dataclasses import replace
 import numpy as np

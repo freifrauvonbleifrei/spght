@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Theresa Pollinger
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Binary serialization of SparseGridHierarchicalTensors, format v0.1.
 
 Layout (little endian throughout):

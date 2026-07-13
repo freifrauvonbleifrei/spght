@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Theresa Pollinger
+
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
 # Example: Compressing the WDAS cloud step-by-step
 
 1. Download and extract dataset from the

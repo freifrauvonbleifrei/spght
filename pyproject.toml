@@ -8,6 +8,8 @@ version = "0.0.1"
 dynamic = ["authors"]
 description = "Sparse Grid Hierarchical Tensors"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSES/*.txt"]
 requires-python = ">=3.10"
 classifiers = ["Programming Language :: Python :: 3"]
 dependencies = ["bitarray","numpy", "PyWavelets"]
