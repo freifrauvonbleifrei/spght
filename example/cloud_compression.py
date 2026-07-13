@@ -1,7 +1,7 @@
 import argparse
 import math
 import numpy as np
-from os.path import basename
+from os.path import basename, getsize, splitext
 
 import openvdb as vdb
 
@@ -55,7 +55,8 @@ if __name__ == "__main__":
         "--output_file",
         type=str,
         default=None,
-        help="Path to the output file where the compressed tensor will be saved.",
+        help="Path of the .spght output file where the compressed tensor will "
+        "be saved; derived from the input file name by default.",
     )
     parser.add_argument(
         "--epsilon",
@@ -92,9 +93,16 @@ if __name__ == "__main__":
     compressed_values = compress(hierarchical_values, epsilon=args.epsilon)
     report("After compression", compressed_values)
 
-    # re-interpolate onto OpenVDB grid
+    # write the compressed tensor to a .spght file
+    input_stem = splitext(basename(args.input_file))[0]
+    spght_file = args.output_file or f"spght_{args.epsilon}_{input_stem}.spght"
+    compressed_values.write(spght_file)
+    print(f"Wrote {spght_file} ({getsize(spght_file) / 2**20:.2f} MiB)")
+
+    # re-interpolate onto OpenVDB grid, from the file we just wrote
+    loaded_values = SparseGridHierarchicalTensors.read(spght_file)
     spght_openvdb_grid = spght_to_vdb_grid(
-        compressed_values, bbox_min, field_name="density"
+        loaded_values, bbox_min, field_name="density"
     )
     spght_openvdb_grid.transform = grid.transform  # preserve original transform
     spght_openvdb_grid.prune(tolerance=0.0)  # collapse uniform regions to save memory

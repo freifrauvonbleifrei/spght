@@ -32,8 +32,8 @@ def interpolate_subspace(
     num_dims = len(subspace.extents)
     assert len(coordinates.shape) == 2 and coordinates.shape[1] == num_dims
     assert subspace.data is not None
-
-    # works for dense and sparse alike; dropped coefficients read as zeros
+    # the n-d view works for dense and sparse alike (dropped coefficients
+    # read as zeros); the quantization fields are reserved and not yet applied
     coeffs = subspace.data.to_dense()
 
     for d in range(num_dims):

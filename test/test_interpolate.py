@@ -146,3 +146,27 @@ def test_interpolate_fine_scale_random():
             f"max error {max_error} exceeds tolerance for dimensionality "
             f"{dimensionality}"
         )
+
+
+def test_interpolate_ignores_reserved_quantization_fields():
+    from spght.data_structures import SparseGridHierarchicalTensors, Subspace
+    from spght.tensor import DenseTensor
+
+    # the quantization fields are reserved: interpolation returns the stored
+    # coefficient unchanged
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=2,
+        max_level=(0, 0),
+        subspaces={
+            (0, 0): Subspace(
+                extents=(1, 1),
+                precision_bits=64,
+                data=DenseTensor.from_dense(np.array([[30.0]])),
+                quantization_scale=0.1,
+                quantization_offset=-1.0,
+                quantization_parameter=2.5,
+            )
+        },
+    )
+    value = interpolate(np.array([0.4, 0.7]), tensors)
+    assert np.isclose(value, 30.0)

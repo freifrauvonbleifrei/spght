@@ -1,3 +1,129 @@
 # spght: Sparse Grid Hierarchical Tensors
 
 pronounced "spaghetti".
+
+spght defines a memory and storage representation of sparse grids /
+hierarchical wavelet coefficients. A function on a structured grid is
+`hierarchize`d into hierarchical subspaces (one coefficient block per level
+vector), optionally `compress`ed by dropping small coefficients, evaluated
+with `interpolate`, and written to / read from the binary file format
+documented below.
+
+## File format, version 0.1
+
+One spght file stores one `SparseGridHierarchicalTensors` container: a set of
+subspaces, each identified by its level vector `l = (l_1, ..., l_d)` and
+holding a linear buffer of coefficient values.
+
+General properties:
+
+- All multi-byte values are **little endian**. There is no implicit padding
+  or alignment; every field follows the previous one directly.
+- Subspaces appear (in the table and as records) in the **canonical order**:
+  ascending level sum, ties broken lexicographically with dimension 0 most
+  significant. A file prefix therefore contains a complete coarse
+  approximation that is progressively refined by further records.
+- Every subspace's values are stored as a **1-D buffer in the subspace's
+  linearization order** (see *Linearization orders*); the n-dimensional view
+  is reconstructed from extents + order on demand.
+- The format is a **draft**: it may change without a version bump until 1.0.
+
+### File header
+
+| offset | size (bytes) | type | field |
+|---|---|---|---|
+| 0 | 33 | bytes | magic string: ASCII `"sparse grid hierarchical tensors"` followed by one NUL byte |
+| 33 | 1 | uint8 | format version, major (currently 0) |
+| 34 | 1 | uint8 | format version, minor (currently 1) |
+| 35 | 2 | uint16 | number of dimensions `d` (1 to 65535) |
+| 37 | 8 | uint64 | number of subspaces `n` |
+| 45 | `d` | uint8 each | maximum level per dimension |
+| 45 + `d` | `n * (d + 8)` | table entries | subspace table (see below) |
+| 45 + `d` + `n * (d + 8)` | 4 | uint32 | CRC-32 (zlib) checksum of all preceding header bytes, verified on read |
+
+Each **subspace table** entry is:
+
+| size (bytes) | type | field |
+|---|---|---|
+| `d` | uint8 each | level vector of the subspace |
+| 8 | uint64 | absolute byte offset of the subspace record from file start |
+
+The table makes every record independently addressable, so a reader can
+select subspaces by level (e.g. to interpolate only at relevant scales)
+without scanning the file. Records are laid out contiguously after the
+header, in table order.
+
+### Subspace record
+
+| size (bytes) | type | field |
+|---|---|---|
+| `8 * d` | uint64 each | extents (logical shape of the subspace) |
+| 1 | uint8 | linearization order code: `C` = 0, `F` = 1, `ZC` = 2, `ZF` = 3 |
+| 1 | uint8 | tensor kind: `EMPTY` = 0, `FULL` = 1, `LINEAR` = 2 |
+| 1 | char | value dtype: numpy kind character (`f` float, `i` signed int, `u` unsigned int, ...) |
+| 1 | uint8 | value dtype: item size in bytes (together e.g. `f8` = float64, `i1` = int8) |
+| 2 | uint16 | precision bits |
+| 2 | uint16 | padding bits |
+| 1 | uint8 | compression (0 = none; reserved) |
+| 8 | float64 | `quantization_scale` (reserved, see below) |
+| 8 | float64 | `quantization_offset` (reserved) |
+| 8 | float64 | `quantization_parameter` (reserved) |
+| 8 | uint64 | number of stored entries |
+| 8 | uint64 | number of bytes in the data blob |
+| 4 | uint32 | CRC-32 (zlib) checksum of the data blob, verified on read |
+| (blob) | bytes | data blob, see below |
+
+### Data blob
+
+The blob content depends on the tensor kind:
+
+- **`EMPTY` (0)**: no blob (zero bytes); every entry of the subspace is
+  implicitly zero. This is deliberately the all-zero-bytes default: a
+  zero-initialized record reads as "no data".
+- **`FULL` (1)**: the complete linear value buffer, `prod(extents)` entries
+  of the value dtype, in the subspace's linearization order.
+- **`LINEAR` (2)**: the sorted linear indices of the stored entries, followed
+  by the matching value buffer. Indices are stored in the **smallest unsigned
+  integer type that can hold `prod(extents) - 1`** (uint8 up to 256 entries,
+  uint16 up to 2^16, uint32 up to 2^32, else uint64); this type is derived
+  from the extents and not stored explicitly. Entries not listed are
+  implicitly zero.
+
+Future kinds (e.g. interval/run-based sparsity) get new tensor-kind values.
+
+### Normalization / quantization (reserved)
+
+Each subspace record carries three float64 fields reserved for future
+per-subspace normalization/quantization support: `quantization_scale`
+(default 1.0), `quantization_offset` (default 0.0), and
+`quantization_parameter` (default 0.0). They are stored and round-tripped
+but not yet interpreted; readers must currently return the value buffer
+unchanged. Together with the integer value dtypes the format already
+supports, they are intended to describe how stored (e.g. int8-quantized or
+normalized) coefficients map back to logical coefficient values.
+
+### Linearization orders
+
+The order code describes how the n-dimensional subspace is flattened into
+the linear buffer (and what the `LINEAR` indices refer to):
+
+- **`C` (0)**: row-major, last dimension varies fastest.
+- **`F` (1)**: column-major, first dimension varies fastest.
+- **`ZC` (2)** / **`ZF` (3)**: Z-order (Morton) curves; dimensions are visited
+  round-robin starting with dimension 0 (`ZC`) or the last dimension (`ZF`),
+  where a dimension drops out of the rotation once its extent is exhausted.
+  For power-of-two extents this is classic bit interleaving; for arbitrary
+  extents the curve bisects each dimension's remaining extent into
+  ceil/floor halves, staying bijective without padding.
+
+### Integrity and limits
+
+- A reader must verify the magic string, reject unknown major/minor
+  versions, verify the header CRC-32 before trusting the subspace table, and
+  verify each record's CRC-32 before trusting its blob.
+- The number of dimensions is a uint16: 1 to 65535. Levels are stored as
+  single bytes: at most 255 per dimension. Extents and subspace counts are
+  uint64.
+- `precision_bits` is carried per subspace but not yet enforced as a storage
+  width; values are stored at their dtype's width. `compression` is reserved
+  and must currently be 0.
