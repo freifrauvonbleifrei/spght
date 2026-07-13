@@ -14,41 +14,52 @@ from spght.wavelets import half_haar
 
 def hierarchize(
     nodal_values: npt.NDArray,
-    deviate_from_power_of_two: int | Sequence[int] = 0,
     wavelet: pywt.Wavelet = half_haar,
+    min_level: int | Sequence[int] = 0,
 ) -> data_structures.SparseGridHierarchicalTensors:
+    """Decompose nodal values into hierarchical subspaces."""
     num_dim = nodal_values.ndim
+    minimum_levels = min_level
+    if isinstance(min_level, int):
+        minimum_levels = [min_level] * num_dim
     level: npt.NDArray = np.ndarray(num_dim, dtype=int)
     for d in range(num_dim):
-        if isinstance(deviate_from_power_of_two, int):
-            level[d] = level_from_extent(
-                nodal_values.shape[d] - deviate_from_power_of_two
-            )
-        else:
-            level[d] = level_from_extent(
-                nodal_values.shape[d] - deviate_from_power_of_two[d]
+        level[d] = level_from_extent(nodal_values.shape[d])
+        if not 0 <= minimum_levels[d] <= level[d]:
+            raise ValueError(
+                f"min_level {minimum_levels} must be between 0 and the "
+                f"maximum level {tuple(level[: d + 1])} in every dimension"
             )
 
     modified_values = [nodal_values.copy()]
     for d in range(num_dim):
-        # Apply the Haar wavelet transform along each dimension
+        # Apply the wavelet transform along each dimension, stopping the
+        # cascade at min_level
+        num_levels = int(level[d]) - minimum_levels[d]
         updated_values = []
         for slices in modified_values:
-            updated_values.extend(pywt.wavedec(slices, wavelet, axis=d))
-            # TODO add lmin
+            if num_levels == 0:
+                updated_values.append(slices)
+            else:
+                updated_values.extend(
+                    pywt.wavedec(slices, wavelet, axis=d, level=num_levels)
+                )
         modified_values = updated_values
 
     # construct a matching list of subspace levels: tensor product of 1D levels
-    # from 0 to level[d] for each dimension d. The order must match the order in
-    # which `modified_values` was built by the nested wavedec loop above, i.e.
-    # C-order.
+    # from min_level[d] to level[d] for each dimension d. The order must match
+    # the order in which `modified_values` was built by the nested wavedec loop
+    # above, i.e. C-order (wavedec returns the coarsest block first).
     subspace_levels = list(
-        itertools.product(*(range(level[d] + 1) for d in range(num_dim)))
+        itertools.product(
+            *(range(minimum_levels[d], level[d] + 1) for d in range(num_dim))
+        )
     )
 
     return data_structures.SparseGridHierarchicalTensors(
         dimensions=num_dim,
         max_level=tuple(level),
+        min_level=tuple(minimum_levels),
         subspaces={
             # construction from a full array always yields dense (linear)
             # storage; sparsification only happens in compress()

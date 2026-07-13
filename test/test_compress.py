@@ -140,3 +140,21 @@ def test_compress_partial_error_bounded():
         return sum(s.num_bytes for s in tensors.subspaces.values())
 
     assert total_bytes(compressed) < total_bytes(hierarchical)
+
+
+def test_compress_with_min_level():
+    rng = np.random.default_rng(8)
+    hierarchical = hierarchize(rng.random((8, 8)), min_level=1)
+    compressed = compress(hierarchical, epsilon=1e9, only_whole_subspaces=True)
+    assert set(compressed.subspaces.keys()) == {(1, 1)}
+    assert compressed.min_level == (1, 1)
+    assert compressed.max_level == (1, 1)
+
+    epsilon = 0.02
+    compressed = compress(hierarchical, epsilon=epsilon)
+    assert compressed.min_level == (1, 1)
+    midpoints = midpoint_coordinates_from_level([3, 3])
+    reconstructed = interpolate(midpoints, compressed)
+    nodal_values = interpolate(midpoints, hierarchical)
+    error_bound = epsilon * len(hierarchical.subspaces)
+    assert np.max(np.abs(reconstructed - nodal_values)) <= error_bound

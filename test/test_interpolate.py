@@ -170,3 +170,16 @@ def test_interpolate_ignores_reserved_quantization_fields():
     )
     value = interpolate(np.array([0.4, 0.7]), tensors)
     assert np.isclose(value, 30.0)
+
+
+def test_interpolate_min_level_reconstruction_exact():
+    # stopping the cascade at min_level must not change what the hierarchy
+    # represents: midpoint reconstruction stays exact
+    rng = np.random.default_rng(7)
+    for shape, min_level in [((16,), 2), ((8, 8), (1, 2)), ((4, 4, 4), 1)]:
+        nodal_values = rng.random(shape)
+        hierarchical_tensors = hierarchize(nodal_values, min_level=min_level)
+        level = [int(np.log2(extent)) for extent in shape]
+        midpoints = midpoint_coordinates_from_level(level)
+        values = interpolate(midpoints, hierarchical_tensors)
+        assert np.allclose(values, nodal_values)
