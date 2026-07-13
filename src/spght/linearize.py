@@ -20,6 +20,7 @@ def extent_from_level(level: int) -> int:
 Order = Literal["C", "F", "ZC", "ZF"]
 
 MultiIndices = Union[Sequence[Sequence[int]], npt.NDArray[np.integer]]
+IndexLike = Union[int, np.integer, Sequence[int], MultiIndices]
 Coordinates = Union[Sequence[Sequence[float]], npt.NDArray[np.floating]]
 
 

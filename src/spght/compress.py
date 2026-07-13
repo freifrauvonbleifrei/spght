@@ -16,10 +16,11 @@ def compress(
         subspaces=dict(),
     )
     for level, subspace in hierarchical_tensors.subspaces.items():
-        assert subspace.values is not None
-        if np.all(np.abs(subspace.values) <= epsilon):
+        assert subspace.data is not None
+        coefficients = subspace.data.linear_values
+        if np.all(np.abs(coefficients) <= epsilon):
             continue
-        elif not only_whole_subspaces and np.any(np.abs(subspace.values) < epsilon):
+        elif not only_whole_subspaces and np.any(np.abs(coefficients) < epsilon):
             raise NotImplementedError(
                 "Partial subspace compression is not implemented yet."
             )
