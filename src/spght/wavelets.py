@@ -15,10 +15,26 @@ from spght.basis import (
 from spght.lifting import Basis1D, LiftingScheme, LiftingStep
 
 
-def _periodic_vertex_basis(scheme: LiftingScheme, bc_left, bc_right) -> Basis1D:
-    if bc_left is not None or bc_right is not None:
-        raise ValueError("a periodic basis wraps on both sides; do not pass rules")
-    return Basis1D(VertexCentered(periodic=True), scheme, Periodic(), Periodic())
+def _vertex_basis(
+    scheme: LiftingScheme,
+    bc_left: BoundaryRule | None,
+    bc_right: BoundaryRule | None,
+    include_boundary: bool = True,
+    periodic: bool = False,
+) -> Basis1D:
+    """Shared constructor logic for vertex-centered bases."""
+    if periodic:
+        if bc_left is not None or bc_right is not None:
+            raise ValueError("a periodic basis wraps on both sides; do not pass rules")
+        return Basis1D(VertexCentered(periodic=True), scheme, Periodic(), Periodic())
+    # interior-only grids default to homogeneous Dirichlet walls
+    default: BoundaryRule = Extrapolate() if include_boundary else Dirichlet(0.0)
+    return Basis1D(
+        VertexCentered(include_boundary),
+        scheme,
+        bc_left if bc_left is not None else default,
+        bc_right if bc_right is not None else default,
+    )
 
 
 # we want wavelets where we implicitly assume that higher level
@@ -82,16 +98,8 @@ def hat_basis(
     periodic: bool = False,
 ) -> Basis1D:
     """The hierarchical hat basis; details are sparse grid surpluses."""
-    if periodic:
-        return _periodic_vertex_basis(hierarchical_hat, bc_left, bc_right)
-    if not include_boundary:
-        bc_left = bc_left if bc_left is not None else Dirichlet(0.0)
-        bc_right = bc_right if bc_right is not None else Dirichlet(0.0)
-    return Basis1D(
-        VertexCentered(include_boundary),
-        hierarchical_hat,
-        bc_left if bc_left is not None else Extrapolate(),
-        bc_right if bc_right is not None else Extrapolate(),
+    return _vertex_basis(
+        hierarchical_hat, bc_left, bc_right, include_boundary, periodic
     )
 
 
@@ -100,14 +108,7 @@ def cdf_2_2_basis(
     bc_right: BoundaryRule | None = None,
     periodic: bool = False,
 ) -> Basis1D:
-    if periodic:
-        return _periodic_vertex_basis(cdf_2_2, bc_left, bc_right)
-    return Basis1D(
-        VertexCentered(include_boundary=True),
-        cdf_2_2,
-        bc_left if bc_left is not None else Extrapolate(),
-        bc_right if bc_right is not None else Extrapolate(),
-    )
+    return _vertex_basis(cdf_2_2, bc_left, bc_right, periodic=periodic)
 
 
 def cubic_basis(
@@ -115,11 +116,4 @@ def cubic_basis(
     bc_right: BoundaryRule | None = None,
     periodic: bool = False,
 ) -> Basis1D:
-    if periodic:
-        return _periodic_vertex_basis(cubic_interpolet, bc_left, bc_right)
-    return Basis1D(
-        VertexCentered(include_boundary=True),
-        cubic_interpolet,
-        bc_left if bc_left is not None else Extrapolate(),
-        bc_right if bc_right is not None else Extrapolate(),
-    )
+    return _vertex_basis(cubic_interpolet, bc_left, bc_right, periodic=periodic)
