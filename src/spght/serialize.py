@@ -52,14 +52,13 @@ Subspace record:
 import struct
 import zlib
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, cast
 
 import numpy as np
 
 from spght.data_structures import (
     SparseGridHierarchicalTensors,
     Subspace,
-    open_file,
 )
 from spght.linearize import Order
 from spght.tensor import DenseTensor, SparseTensor, Tensor, TensorKind
@@ -90,6 +89,11 @@ def _read_exactly(stream: BinaryIO, num_bytes: int) -> bytes:
             f"Truncated spght data: expected {num_bytes} bytes, got {len(data)}"
         )
     return data
+
+
+def open_file(path: "str | Path", mode: str = "rb") -> BinaryIO:
+    """Small wrapper for file access used by the prototype API."""
+    return cast(BinaryIO, Path(path).open(mode))
 
 
 def _open_stream(target: "str | Path | BinaryIO", mode: str) -> tuple[BinaryIO, bool]:

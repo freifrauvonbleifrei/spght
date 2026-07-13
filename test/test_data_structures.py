@@ -11,6 +11,7 @@ from spght.data_structures import (
     TensorKind,
     subspace_order_key,
 )
+from spght.hierarchize import hierarchize
 from spght.tensor import DenseTensor, SparseTensor, make_tensor
 
 
@@ -238,8 +239,6 @@ def test_subspace_holds_tensor():
 
 
 def test_hierarchize_produces_dense_tensors():
-    from spght.hierarchize import hierarchize
-
     nodal_values = np.random.default_rng(2).random((4, 8))
     hierarchical_tensors = hierarchize(nodal_values)
     for _, subspace in hierarchical_tensors.subspaces.items():
@@ -289,8 +288,6 @@ def test_subspaces_canonically_ordered():
 
 
 def test_hierarchize_subspaces_canonically_ordered():
-    from spght.hierarchize import hierarchize
-
     nodal_values = np.random.default_rng(4).random((4, 2, 4))
     hierarchical_tensors = hierarchize(nodal_values)
     keys = list(hierarchical_tensors.subspaces.keys())
