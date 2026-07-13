@@ -27,10 +27,11 @@ def levels_from_extent(extent: np.ndarray) -> np.ndarray:
 def spght_to_vdb_grid(
     hierarchical_tensors: spght.SparseGridHierarchicalTensors,
     bbox_min: np.ndarray,
+    wavelet: spght.Basis1D,
     field_name: str = "density",
 ) -> vdb.FloatGrid:
     """Synthesize a sparse grid hierarchical tensor onto an OpenVDB grid."""
-    nodal_values = spght.dehierarchize(hierarchical_tensors)
+    nodal_values = spght.dehierarchize(hierarchical_tensors, wavelet=wavelet)
 
     # Create a new OpenVDB grid and copy the interpolated values into it
     grid = vdb.FloatGrid()
@@ -74,8 +75,9 @@ if __name__ == "__main__":
     nodal_values = np.full(shape, grid.background, dtype=np.float64)
     grid.copyToArray(nodal_values, ijk=bbox_min)
 
-    # Hierarchize the tensor
-    hierarchical_values = spght.hierarchize(nodal_values)
+    # Hierarchize the tensor, using the lifting-based Haar transform
+    wavelet = spght.haar_basis()
+    hierarchical_values = spght.hierarchize(nodal_values, wavelet=wavelet)
 
     def report(label: str, tensors) -> None:
         num_bytes = sum(s.num_bytes for s in tensors.subspaces.values())
@@ -100,7 +102,7 @@ if __name__ == "__main__":
     # re-interpolate onto OpenVDB grid, from the file we just wrote
     loaded_values = spght.read(spght_file)
     spght_openvdb_grid = spght_to_vdb_grid(
-        loaded_values, bbox_min, field_name="density"
+        loaded_values, bbox_min, wavelet, field_name="density"
     )
     spght_openvdb_grid.transform = grid.transform  # preserve original transform
     spght_openvdb_grid.prune(tolerance=0.0)  # collapse uniform regions to save memory
