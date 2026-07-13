@@ -1,5 +1,9 @@
 # spght: Sparse Grid Hierarchical Tensors
 
+[![Python Lint and Test](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-lint-and-test.yml/badge.svg)](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-lint-and-test.yml)
+[![WDAS Cloud Compression](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-example.yml/badge.svg)](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-example.yml)
+[![Coverage](./coverage.svg)](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-coverage.yml)
+
 pronounced "spaghetti".
 
 spght defines a memory and storage representation of sparse grids /
