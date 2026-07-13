@@ -1,7 +1,6 @@
 import argparse
 import math
 import numpy as np
-from dataclasses import replace
 from os.path import basename, getsize, splitext
 
 import openvdb as vdb
@@ -95,7 +94,6 @@ if __name__ == "__main__":
     report("After compression", compressed_values)
 
     # write the compressed tensor to a .spght file
-    compressed_values = cast_precision(compressed_values, args.precision_bits)
     input_stem = splitext(basename(args.input_file))[0]
     spght_file = args.output_file or f"spght_{args.epsilon}_{input_stem}.spght"
     compressed_values.write(spght_file)
