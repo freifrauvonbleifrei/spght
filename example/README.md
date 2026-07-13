@@ -31,7 +31,7 @@ python3 cloud_compression.py --epsilon=0.01 wdas_cloud/wdas_cloud_sixteenth.vdb
 4. evaluate errors and numbers of coefficients w.r.t. the original cloud
 
 ```shell
-
+python3 openvdb_error_evaluation.py wdas_cloud/wdas_cloud_sixteenth.vdb spght_*_wdas_cloud_sixteenth.vdb
 ```
 
 5. (optional) render both in blender, from the same perspective
