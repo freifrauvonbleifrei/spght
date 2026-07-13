@@ -1,0 +1,12 @@
+name: cloud-openvdb-env
+channels:
+  - conda-forge
+dependencies:
+  - python
+  - openvdb=13.0
+  - numpy
+  - pytest
+  # - pip
+  # - pip:
+  #     - icecream
+  
