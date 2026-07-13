@@ -13,16 +13,52 @@ from spght.linearize import coordinates_to_multidim_indices
 from spght.wavelets import half_haar
 
 
-def iter_pole_slices(shape, axis):
-    """Yield index tuples selecting each 1D pole along `axis`."""
-    ndim = len(shape)
-    other_axes = [d for d in range(ndim) if d != axis]
-    other_shape = tuple(shape[d] for d in other_axes)
-    for idx in np.ndindex(other_shape):
-        full_idx = [slice(None)] * ndim
-        for ax, i in zip(other_axes, idx):
-            full_idx[ax] = i
-        yield tuple(full_idx)
+def _evaluate_subspace_haar(
+    scaling_dimensions: Sequence[bool],
+    coordinates: npt.NDArray,
+    subspace: Subspace,
+) -> npt.NDArray:
+    """Fast path: evaluate the subspace directly, without reconstruction."""
+    assert subspace.data is not None
+    doubled_extents = tuple(2 * extent for extent in subspace.extents)
+    cell_indices = coordinates_to_multidim_indices(coordinates, doubled_extents)
+    coefficient_indices = cell_indices // 2
+    signs = np.ones(coordinates.shape[0])
+    for d, is_scaling in enumerate(scaling_dimensions):
+        if not is_scaling:
+            signs *= 1.0 - 2.0 * (cell_indices[:, d] % 2)  # even -> +1, odd -> -1
+    return subspace.data[coefficient_indices] * signs
+
+
+def _reconstruct_subspace_and_evaluate(
+    scaling_dimensions: Sequence[bool],
+    coordinates: npt.NDArray,
+    subspace: Subspace,
+    wavelet=half_haar,
+) -> npt.NDArray:
+    """Reference path: reconstruct the subspace's function on the
+    once-refined grid with the inverse wavelet transform, then evaluate by
+    cell lookup."""
+    assert subspace.data is not None
+    # the n-d view works for dense and sparse alike (dropped coefficients
+    # read as zeros); the quantization fields are reserved and not yet applied
+    coeffs = subspace.data.to_dense()
+
+    for d, is_scaling in enumerate(scaling_dimensions):
+        # one inverse transform step along each dimension doubles its extent
+        if is_scaling:
+            coeffs = pywt.idwt(coeffs, None, wavelet, axis=d)
+        else:
+            coeffs = pywt.idwt(None, coeffs, wavelet, axis=d)
+
+    # evaluate by piecewise-constant cell lookup;
+    # only valid for the Haar scaling function
+    # phi, psi, x = pywt.Wavelet(wavelet).wavefun(level=1) + needs normalization for phi!
+    assert (
+        wavelet == half_haar
+    ), "Only Haar wavelet is currently supported for interpolation"
+    multidim_indices = coordinates_to_multidim_indices(coordinates, coeffs.shape)
+    return coeffs[tuple(multidim_indices.T)]
 
 
 def interpolate_subspace(
@@ -31,41 +67,18 @@ def interpolate_subspace(
     subspace: Subspace,
     wavelet=half_haar,
 ) -> npt.NDArray:
-    """Interpolate on a single subspace using the wavelet transform."""
-    # TODO reconstruct using only necessary coefficients
+    """Interpolate a single subspace's contribution at the given coordinates
+    using wavelet transform."""
     num_dims = len(subspace.extents)
     assert len(coordinates.shape) == 2 and coordinates.shape[1] == num_dims
     assert len(scaling_dimensions) == num_dims
     assert subspace.data is not None
-    # the n-d view works for dense and sparse alike (dropped coefficients
-    # read as zeros); the quantization fields are reserved and not yet applied
-    coeffs = subspace.data.to_dense()
-
-    for d in range(num_dims):
-        # for each 1-d pole in coeffs, we obtain a twice-as-long 1d array
-        coeffs_detail_reconstructed = np.zeros(
-            list(coeffs.shape[:d]) + [coeffs.shape[d] * 2] + list(coeffs.shape[d + 1 :])
-        )
-        mode = "a" if scaling_dimensions[d] else "d"
-        for idx in iter_pole_slices(coeffs.shape, axis=d):
-            coeffs_detail_reconstructed[idx] = pywt.upcoef(
-                part=mode,
-                coeffs=coeffs[idx],
-                wavelet=wavelet,
-                level=1,
-            )
-        coeffs = coeffs_detail_reconstructed
-
-    # evaluate scaling function at the given coordinates
-    # phi, psi, x = pywt.Wavelet(wavelet).wavefun(level=1) + needs normalization for phi!
-    assert (
-        wavelet == half_haar
-    ), "Only Haar wavelet is currently supported for interpolation"
-
-    # interpolate using the scaling function at given coordinate
-    multidim_indices = coordinates_to_multidim_indices(coordinates, coeffs.shape)
-    value = coeffs[tuple(multidim_indices.T)]
-    return value
+    if wavelet == half_haar:
+        if subspace.data.is_sparse or coordinates.shape[0] < subspace.data.size:
+            return _evaluate_subspace_haar(scaling_dimensions, coordinates, subspace)
+    return _reconstruct_subspace_and_evaluate(
+        scaling_dimensions, coordinates, subspace, wavelet
+    )
 
 
 def interpolate_single_coordinate(

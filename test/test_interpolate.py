@@ -4,7 +4,12 @@
 
 import numpy as np
 
-from spght.interpolate import interpolate
+from spght.compress import compress
+from spght.interpolate import (
+    interpolate,
+    _reconstruct_subspace_and_evaluate,
+    interpolate_subspace,
+)
 from spght.hierarchize import hierarchize
 from spght.linearize import extent_from_level, midpoint_coordinates_from_level
 
@@ -187,3 +192,20 @@ def test_interpolate_min_level_reconstruction_exact():
         midpoints = midpoint_coordinates_from_level(level)
         values = interpolate(midpoints, hierarchical_tensors)
         assert np.allclose(values, nodal_values)
+
+
+def test_fast_path_matches_reconstruction():
+
+    rng = np.random.default_rng(9)
+    for shape, min_level in [((8,), 0), ((8, 4), (1, 0)), ((4, 4, 4), 1)]:
+        tensors = compress(
+            hierarchize(rng.random(shape), min_level=min_level), epsilon=0.05
+        )
+        coordinates = rng.random((32, len(shape))) * 0.999
+        for level, subspace in tensors.subspaces.items():
+            scaling = tensors.scaling_dimensions(level)
+            fast = interpolate_subspace(scaling, coordinates, subspace)
+            reference = _reconstruct_subspace_and_evaluate(
+                scaling, coordinates, subspace
+            )
+            assert np.array_equal(fast, reference), (shape, level)
