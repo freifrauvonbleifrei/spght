@@ -69,7 +69,7 @@ value = spght.interpolate(np.array([0.3, 0.6, 0.5]), loaded)
 For a complete worked example — compressing the WDAS cloud dataset and
 evaluating the reconstruction error — see [`example/README.md`](example/README.md).
 
-## File format, version 0.2
+## File format, version 0.3
 
 One spght file stores one `SparseGridHierarchicalTensors` container: a set of
 subspaces, each identified by its level vector `l = (l_1, ..., l_d)` and
@@ -94,13 +94,15 @@ General properties:
 |---|---|---|---|
 | 0 | 33 | bytes | magic string: ASCII `"sparse grid hierarchical tensors"` followed by one NUL byte |
 | 33 | 1 | uint8 | format version, major (currently 0) |
-| 34 | 1 | uint8 | format version, minor (currently 2) |
+| 34 | 1 | uint8 | format version, minor (currently 3) |
 | 35 | 2 | uint16 | number of dimensions `d` (1 to 65535) |
 | 37 | 8 | uint64 | number of subspaces `n` |
 | 45 | `d` | uint8 each | maximum level per dimension |
 | 45 + `d` | `d` | uint8 each | minimum level per dimension (see *Scaling vs. detail subspaces*) |
-| 45 + 2`d` | `n * (d + 8)` | table entries | subspace table (see below) |
-| 45 + 2`d` + `n * (d + 8)` | 4 | uint32 | CRC-32 (zlib) checksum of all preceding header bytes, verified on read |
+| 45 + 2`d` | 4 | uint32 | byte length `b` of the basis block that follows (readers may skip it wholesale) |
+| 45 + 2`d` + 4 | `b` | basis block | uniformity flag + basis descriptor(s), see *Basis descriptors* |
+| 45 + 2`d` + 4 + `b` | `n * (d + 8)` | table entries | subspace table (see below) |
+| 45 + 2`d` + 4 + `b` + `n * (d + 8)` | 4 | uint32 | CRC-32 (zlib) checksum of all preceding header bytes, verified on read |
 
 Each **subspace table** entry is:
 
@@ -151,6 +153,35 @@ The blob content depends on the tensor kind:
   implicitly zero.
 
 Future kinds (e.g. interval/run-based sparsity) get new tensor-kind values.
+
+### Basis descriptors
+
+The basis block records the wavelet of the hierarchical transform. It starts
+with one uint8 **uniformity flag**: 1 means a single basis descriptor follows
+and applies to every dimension; 0 means `d` descriptors follow, one per
+dimension. Each descriptor encodes the complete lifting program, so any
+reader can reconstruct without a registry of named wavelets (the scheme name
+travels as a label only, never as semantics):
+
+| size (bytes) | type | field |
+|---|---|---|
+| 1 | uint8 | centering: cell = 0, vertex = 1, vertex-interior = 2, vertex-periodic = 3 |
+| 1 + 8 | uint8 + float64 | left boundary rule: Extrapolate = 0, Neumann = 1, Periodic = 2, Dirichlet = 3; the float64 is the Dirichlet wall value (0.0 otherwise) |
+| 1 + 8 | uint8 + float64 | right boundary rule, as above |
+| 1 | uint8 | evaluation hint: none = 0, midpoint = 1, nodal_linear = 2 |
+| 16 | bytes | scheme name: zero-terminated ASCII, C-style (at most 15 characters, NUL-padded; label only) |
+| 1 | uint8 | number of lifting steps, then per step: |
+| 1 | uint8 | step kind: predict = 0, update = 1, scale_detail = 2 |
+| 8 | float64 | step factor |
+| 1 | uint8 | number of taps, then per tap: |
+| 1 + 8 | int8 + float64 | stencil offset and weight |
+
+Descriptors are variable-sized (steps and taps differ between schemes) but
+self-delimiting; the block's uint32 length prefix lets readers that only
+need the subspace table skip it without parsing. The centering also
+determines the dof counts per level (e.g. `2^l` cells vs `2^l + 1`
+vertices), which is why extents in this format are always stored
+explicitly.
 
 ### Scaling vs. detail subspaces
 
