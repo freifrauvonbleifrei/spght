@@ -19,9 +19,10 @@ def hierarchize(
 ) -> data_structures.SparseGridHierarchicalTensors:
     """Decompose nodal values into hierarchical subspaces."""
     num_dim = nodal_values.ndim
-    minimum_levels = min_level
     if isinstance(min_level, int):
         minimum_levels = [min_level] * num_dim
+    else:
+        minimum_levels = list(min_level)
     level: npt.NDArray = np.ndarray(num_dim, dtype=int)
     for d in range(num_dim):
         level[d] = level_from_extent(nodal_values.shape[d])
