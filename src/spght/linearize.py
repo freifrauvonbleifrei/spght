@@ -13,6 +13,10 @@ def level_from_extent(extent: int) -> int:
     return math.ceil(np.log2(extent))
 
 
+def extent_from_level(level: int) -> int:
+    return 2**level
+
+
 Order = Literal["C", "F", "ZC", "ZF"]
 
 MultiIndices = Union[Sequence[Sequence[int]], npt.NDArray[np.integer]]
@@ -215,3 +219,26 @@ def coordinates_to_indices(
     return multidim_indices_to_indices(
         coordinates_to_multidim_indices(coordinates, extents), extents, order
     )
+
+
+def midpoint_coordinates_from_level(
+    level: Sequence[int] | npt.NDArray[np.integer],
+) -> npt.NDArray[np.float64]:
+    """Cell-midpoint coordinates in [0, 1]^d for a full grid of the given level."""
+    dimensionality = len(level)
+    extents = np.array([extent_from_level(l) for l in level], dtype=np.int64)
+    unit_voxel_size = np.ones((dimensionality,), dtype=np.float64) / extents
+    stacked_indices = np.meshgrid(
+        *[np.arange(extent) for extent in extents],
+        indexing="ij",
+    )
+    midpoints = np.stack(
+        (
+            *[
+                (stacked_indices[i] + 0.5) * unit_voxel_size[i]
+                for i in range(dimensionality)
+            ],
+        ),
+        axis=-1,
+    )
+    return midpoints

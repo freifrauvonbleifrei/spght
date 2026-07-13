@@ -8,6 +8,7 @@ import openvdb as vdb
 from spght.compress import compress
 from spght.hierarchize import hierarchize
 from spght.interpolate import interpolate
+from spght.linearize import midpoint_coordinates_from_level
 from spght.data_structures import SparseGridHierarchicalTensors
 
 
@@ -29,28 +30,8 @@ def spght_to_vdb_grid(
     field_name: str = "density",
 ) -> vdb.FloatGrid:
     """Interpolate a sparse grid hierarchical tensor onto an OpenVDB grid."""
-    # Compute the shape of the full tensor from the hierarchical representation
-    full_shape = tuple(2**level for level in hierarchical_tensors.max_level)
-    # compute the coordinates of the midpoints of the full tensor in index space
-
-    # unit cube domain for interpolation
-    unit_voxel_size = np.ones((3,), dtype=np.float32) / full_shape
-
-    ii, jj, kk = np.meshgrid(
-        np.arange(full_shape[0]),
-        np.arange(full_shape[1]),
-        np.arange(full_shape[2]),
-        indexing="ij",
-    )
-
-    midpoints = np.stack(
-        (
-            (ii + 0.5) * unit_voxel_size[0],
-            (jj + 0.5) * unit_voxel_size[1],
-            (kk + 0.5) * unit_voxel_size[2],
-        ),
-        axis=-1,
-    )
+    # Cell-midpoint coordinates of the full tensor in the [0, 1]^d unit domain.
+    midpoints = midpoint_coordinates_from_level(hierarchical_tensors.max_level)
     nodal_values = interpolate(midpoints, hierarchical_tensors)
 
     # Create a new OpenVDB grid and copy the interpolated values into it
