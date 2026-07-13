@@ -130,7 +130,6 @@ header, in table order.
 | 1 | uint8 | compression (0 = none; reserved) |
 | 8 | float64 | `quantization_scale` (reserved, see below) |
 | 8 | float64 | `quantization_offset` (reserved) |
-| 8 | float64 | `quantization_parameter` (reserved) |
 | 8 | uint64 | number of stored entries |
 | 8 | uint64 | number of bytes in the data blob |
 | 4 | uint32 | CRC-32 (zlib) checksum of the data blob, verified on read |
@@ -201,14 +200,14 @@ classic full decomposition.
 
 ### Normalization / quantization (reserved)
 
-Each subspace record carries three float64 fields reserved for future
+Each subspace record carries two float64 fields reserved for future
 per-subspace normalization/quantization support: `quantization_scale`
-(default 1.0), `quantization_offset` (default 0.0), and
-`quantization_parameter` (default 0.0). They are stored and round-tripped
-but not yet interpreted; readers must currently return the value buffer
-unchanged. Together with the integer value dtypes the format already
-supports, they are intended to describe how stored (e.g. int8-quantized or
-normalized) coefficients map back to logical coefficient values.
+(default 1.0) and `quantization_offset` (default 0.0). They are stored and
+round-tripped but not yet interpreted; readers must currently return the
+value buffer unchanged. Together with the integer value dtypes the format
+already supports, they are intended to describe how stored (e.g.
+int8-quantized or normalized) coefficients map back to logical coefficient
+values.
 
 ### Linearization orders
 

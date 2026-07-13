@@ -63,7 +63,6 @@ Subspace record:
     compression            uint8
     quantization_scale     float64
     quantization_offset    float64
-    quantization_parameter float64
     num stored entries     uint64
     num data bytes         uint64
     checksum               uint32, crc32 of the data blob (verified on read)
@@ -109,7 +108,7 @@ _CODE_TO_ORDER: dict[int, Order] = {c: o for o, c in _ORDER_TO_CODE.items()}
 
 _HEADER = struct.Struct("<33sBBHQ")  # magic, major, minor, ndim, num subspaces
 _HEADER_CRC = struct.Struct("<I")  # closes the header, covers all bytes before it
-_RECORD = struct.Struct("<BBcBHHBdddQQI")  # see subspace record layout above
+_RECORD = struct.Struct("<BBcBHHBddQQI")  # see subspace record layout above
 
 
 _BC = struct.Struct("<Bd")  # boundary rule code + Dirichlet wall value
@@ -348,7 +347,6 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
         subspace.compression,
         subspace.quantization_scale,
         subspace.quantization_offset,
-        subspace.quantization_parameter,
         num_stored,
         len(blob),
         zlib.crc32(blob),
@@ -368,7 +366,6 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         compression,
         quantization_scale,
         quantization_offset,
-        quantization_parameter,
         num_stored,
         num_blob_bytes,
         checksum,
@@ -413,7 +410,6 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         data=data,
         quantization_scale=quantization_scale,
         quantization_offset=quantization_offset,
-        quantization_parameter=quantization_parameter,
         padding_bits=padding_bits,
         compression=compression,
     )

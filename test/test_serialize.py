@@ -41,10 +41,6 @@ def _assert_equal_containers(
         assert (
             actual_subspace.quantization_offset == expected_subspace.quantization_offset
         )
-        assert (
-            actual_subspace.quantization_parameter
-            == expected_subspace.quantization_parameter
-        )
         assert actual_subspace.order == expected_subspace.order
         if expected_subspace.data is None:
             assert actual_subspace.kind == TensorKind.EMPTY
@@ -120,7 +116,6 @@ def test_roundtrip_all_kinds_orders_and_dtypes(tmp_path):
                 data=DenseTensor.from_dense(np.array([[1, 2], [3, 4]], dtype=np.int8)),
                 quantization_scale=0.25,
                 quantization_offset=2.0,
-                quantization_parameter=-1.5,
             ),
         },
     )
@@ -136,8 +131,7 @@ def test_roundtrip_all_kinds_orders_and_dtypes(tmp_path):
     assert (
         quantized.quantization_scale,
         quantized.quantization_offset,
-        quantized.quantization_parameter,
-    ) == (0.25, 2.0, -1.5)
+    ) == (0.25, 2.0)
 
 
 def test_write_picks_cheapest_on_disk_kind():
