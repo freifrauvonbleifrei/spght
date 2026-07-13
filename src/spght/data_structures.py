@@ -438,18 +438,27 @@ class SparseTensor(Tensor):
             yield tuple(int(i) for i in c), v
 
 
-def make_tensor(
-    indices, values, shape, order: Order = "C", density_threshold: float = 0.1
+def make_tensor_from_linear(
+    keys, values, shape, order: Order = "C", density_threshold: float = 0.5
 ) -> Tensor:
-    """Pick a representation by density."""
+    """Pick a representation by density, from linear indices + values."""
+    keys = np.asarray(keys)
     values = np.asarray(values)
     total = int(np.prod(shape)) if shape else 1
     density = len(values) / total if total else 0.0
     if density < density_threshold:
-        return SparseTensor(indices, values, shape, order=order)
+        return SparseTensor.from_linear(keys, values, shape, order=order)
     flat = np.zeros(total, dtype=values.dtype)
-    flat[multidim_indices_to_indices(indices, shape, order)] = values
+    flat[keys] = values
     return DenseTensor(flat, shape, order=order)
+
+
+def make_tensor(
+    indices, values, shape, order: Order = "C", density_threshold: float = 0.5
+) -> Tensor:
+    """Pick a representation by density, from multidim indices + values."""
+    keys = multidim_indices_to_indices(indices, shape, order)
+    return make_tensor_from_linear(keys, values, shape, order, density_threshold)
 
 
 @dataclass(frozen=True, slots=True)
