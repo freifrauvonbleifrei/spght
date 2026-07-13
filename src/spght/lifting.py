@@ -95,6 +95,13 @@ def as_bases(basis: BasisLike, num_dim: int) -> tuple[Basis1D, ...]:
     return per_dimension(basis, Basis1D, num_dim, "Basis1D")
 
 
+def _axis_slice(ndim: int, axis: int, along: slice) -> tuple[slice, ...]:
+    """An index tuple selecting `along` on `axis` and everything else."""
+    slicer = [slice(None)] * ndim
+    slicer[axis] = along
+    return tuple(slicer)
+
+
 def _padded(
     arr: npt.NDArray,
     axis: int,
@@ -134,21 +141,17 @@ def _stencil_sum(
     total: npt.NDArray | None = None
     for offset, weight in zip(step.offsets, step.weights):
         start = shift + offset + pad_left
-        taps = [slice(None)] * source.ndim
-        taps[axis] = slice(start, start + target_extent)
-        term = weight * padded[tuple(taps)]
+        taps = _axis_slice(source.ndim, axis, slice(start, start + target_extent))
+        term = weight * padded[taps]
         total = term if total is None else total + term
     assert total is not None
     return total
 
 
 def _split(values: npt.NDArray, axis: int, centering: Centering):
-    first = [slice(None)] * values.ndim
-    second = [slice(None)] * values.ndim
-    first[axis] = slice(0, None, 2)
-    second[axis] = slice(1, None, 2)
-    even, odd = values[tuple(first)], values[tuple(second)]
-    return (even, odd) if centering.even_first else (odd, even)
+    first = values[_axis_slice(values.ndim, axis, slice(0, None, 2))]
+    second = values[_axis_slice(values.ndim, axis, slice(1, None, 2))]
+    return (first, second) if centering.even_first else (second, first)
 
 
 def _merge(
@@ -157,14 +160,12 @@ def _merge(
     shape = list(even.shape)
     shape[axis] = even.shape[axis] + odd.shape[axis]
     merged = np.empty(shape, dtype=np.result_type(even, odd))
-    first = [slice(None)] * merged.ndim
-    second = [slice(None)] * merged.ndim
-    first[axis] = slice(0, None, 2)
-    second[axis] = slice(1, None, 2)
+    first = _axis_slice(merged.ndim, axis, slice(0, None, 2))
+    second = _axis_slice(merged.ndim, axis, slice(1, None, 2))
     if centering.even_first:
-        merged[tuple(first)], merged[tuple(second)] = even, odd
+        merged[first], merged[second] = even, odd
     else:
-        merged[tuple(first)], merged[tuple(second)] = odd, even
+        merged[first], merged[second] = odd, even
     return merged
 
 
