@@ -8,7 +8,7 @@ from enum import IntEnum
 import numpy as np
 import numpy.typing as npt
 from pathlib import Path
-from typing import BinaryIO, ClassVar, Iterator, Sequence, cast
+from typing import BinaryIO, ClassVar, Iterator, cast
 
 from spght.linearize import (
     IndexLike,
