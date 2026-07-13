@@ -9,6 +9,7 @@ SPDX-License-Identifier: CC-BY-4.0
 [![Python Lint and Test](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-lint-and-test.yml/badge.svg)](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-lint-and-test.yml)
 [![WDAS Cloud Compression](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-example.yml/badge.svg)](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-example.yml)
 [![Coverage](./coverage.svg)](https://github.com/freifrauvonbleifrei/spght/actions/workflows/python-coverage.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSES/Apache-2.0.txt)
 
 pronounced "spaghetti".
 
