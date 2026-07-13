@@ -5,7 +5,10 @@
 import numpy as np
 import pytest
 
-from spght.hierarchize import hierarchize
+from spght.hierarchize import hierarchize, dehierarchize
+from spght.compress import compress
+from spght.interpolate import interpolate
+from spght.linearize import midpoint_coordinates_from_level
 
 
 def test_hierarchize_haar_1d():
@@ -108,3 +111,30 @@ def test_hierarchize_min_level_out_of_range_raises():
         hierarchize(nodal_values, min_level=3)
     with pytest.raises(ValueError):
         hierarchize(nodal_values, min_level=-1)
+
+
+def test_dehierarchize_roundtrip():
+    rng = np.random.default_rng(10)
+    for shape in [(8,), (4, 8), (4, 4, 4)]:
+        nodal_values = rng.random(shape)
+        assert np.allclose(dehierarchize(hierarchize(nodal_values)), nodal_values)
+
+
+def test_dehierarchize_roundtrip_min_level():
+    rng = np.random.default_rng(11)
+    for shape, min_level in [((16,), 2), ((8, 8), (1, 2)), ((4, 4, 4), 1)]:
+        nodal_values = rng.random(shape)
+        hierarchical = hierarchize(nodal_values, min_level=min_level)
+        assert np.allclose(dehierarchize(hierarchical), nodal_values)
+
+
+def test_dehierarchize_matches_interpolation_after_compression():
+
+    rng = np.random.default_rng(12)
+    nodal_values = rng.random((16, 16))
+    compressed = compress(hierarchize(nodal_values), epsilon=0.05)
+    synthesized = dehierarchize(compressed)
+    interpolated = interpolate(
+        midpoint_coordinates_from_level(compressed.max_level), compressed
+    )
+    assert np.allclose(synthesized, interpolated)
