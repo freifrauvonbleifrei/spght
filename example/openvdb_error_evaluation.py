@@ -17,6 +17,7 @@ from os.path import getsize, exists, splitext
 import numpy as np
 
 import openvdb as vdb
+import spght
 
 
 def read_dense(grid, bbox_min, shape) -> np.ndarray:
@@ -50,7 +51,6 @@ def sibling_spght_file(vdb_filename: str) -> str | None:
 def spght_num_coefficients(spght_filename: str) -> int:
     """Stored value count of an .spght file: nnz for sparse subspaces, the
     full tensor size for dense ones."""
-    import spght
 
     tensors = spght.read(spght_filename)
     return sum(

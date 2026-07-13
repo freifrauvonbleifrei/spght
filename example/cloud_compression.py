@@ -53,11 +53,10 @@ def cast_precision(
 def spght_to_vdb_grid(
     hierarchical_tensors: spght.SparseGridHierarchicalTensors,
     bbox_min: np.ndarray,
-    wavelet: spght.Basis1D,
     field_name: str = "density",
 ) -> vdb.FloatGrid:
     """Synthesize a sparse grid hierarchical tensor onto an OpenVDB grid."""
-    nodal_values = spght.dehierarchize(hierarchical_tensors, wavelet=wavelet)
+    nodal_values = spght.dehierarchize(hierarchical_tensors)
 
     # Create a new OpenVDB grid and copy the interpolated values into it
     grid = vdb.FloatGrid()
@@ -136,7 +135,7 @@ if __name__ == "__main__":
     # re-interpolate onto OpenVDB grid, from the file we just wrote
     loaded_values = spght.read(spght_file)
     spght_openvdb_grid = spght_to_vdb_grid(
-        loaded_values, bbox_min, wavelet, field_name="density"
+        loaded_values, bbox_min, field_name="density"
     )
     spght_openvdb_grid.transform = grid.transform  # preserve original transform
     spght_openvdb_grid.prune(tolerance=0.0)  # collapse uniform regions to save memory
