@@ -3,10 +3,9 @@ from dataclasses import replace
 import numpy as np
 
 
-from spght.data_structures import (
-    SparseGridHierarchicalTensors,
-    make_tensor_from_linear,
-)
+from spght.data_structures import SparseGridHierarchicalTensors
+
+from spght.tensor import make_tensor_from_linear
 
 
 def compress(

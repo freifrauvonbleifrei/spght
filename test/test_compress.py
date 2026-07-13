@@ -2,7 +2,6 @@ import numpy as np
 
 from spght.compress import compress
 from spght.data_structures import (
-    DenseTensor,
     SparseGridHierarchicalTensors,
     Subspace,
     TensorKind,
@@ -10,6 +9,7 @@ from spght.data_structures import (
 from spght.hierarchize import hierarchize
 from spght.interpolate import interpolate
 from spght.linearize import midpoint_coordinates_from_level
+from spght.tensor import DenseTensor
 
 
 def _subspace(array) -> Subspace:
@@ -134,6 +134,7 @@ def test_compress_partial_error_bounded():
     # dropped coefficient adds at most epsilon
     error_bound = epsilon * len(hierarchical.subspaces)
     assert np.max(np.abs(reconstructed - nodal_values)) <= error_bound
+
     # and something must actually have been compressed away
     def total_bytes(tensors) -> int:
         return sum(s.num_bytes for s in tensors.subspaces.values())

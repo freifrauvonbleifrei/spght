@@ -2,14 +2,12 @@ import numpy as np
 import pytest
 
 from spght.data_structures import (
-    DenseTensor,
     SparseGridHierarchicalTensors,
-    SparseTensor,
     Subspace,
     TensorKind,
-    make_tensor,
     subspace_order_key,
 )
+from spght.tensor import DenseTensor, SparseTensor, make_tensor
 
 
 @pytest.mark.parametrize("order", ["C", "F", "ZC", "ZF"])
