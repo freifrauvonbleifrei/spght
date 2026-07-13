@@ -8,10 +8,12 @@ The binary encoding details may still evolve.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Sequence, cast
+from typing import BinaryIO, Sequence
 
+from spght.lifting import Basis1D
 from spght.linearize import Order
 from spght.tensor import Tensor, TensorKind
+from spght.wavelets import haar_basis
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +75,7 @@ class SparseGridHierarchicalTensors:
     # dimension d, subspaces with level[d] == min_level[d] hold scaling
     # coefficients.
     min_level: tuple[int, ...] = ()
+    bases: tuple[Basis1D, ...] = ()
     subspaces: dict[tuple[int, ...], Subspace] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -82,6 +85,10 @@ class SparseGridHierarchicalTensors:
             self.min_level = tuple(0 for _ in range(self.dimensions))
         if len(self.min_level) != self.dimensions:
             raise ValueError("min_level dimensionality does not match container")
+        if self.bases == ():
+            self.bases = (haar_basis(),) * self.dimensions
+        if len(self.bases) != self.dimensions:
+            raise ValueError("bases dimensionality does not match container")
         if any(
             minimum > maximum
             for minimum, maximum in zip(self.min_level, self.max_level)
@@ -129,8 +136,9 @@ class SparseGridHierarchicalTensors:
         self._sort_subspaces()
 
     def write(self, target: "str | Path | BinaryIO") -> None:
-        """Write the hierarchy to disk in the v0.1 binary layout
+        """Write the hierarchy to disk in the v0.3 binary layout
         (see spght.serialize for the format description)."""
+        # imported lazily: serialize imports this class
         from spght.serialize import write
 
         write(self, target)
@@ -141,9 +149,3 @@ class SparseGridHierarchicalTensors:
         from spght.serialize import read
 
         return read(source)
-
-
-def open_file(path: str | Path, mode: str = "rb") -> BinaryIO:
-    """Small wrapper for file access used by the prototype API."""
-
-    return cast(BinaryIO, Path(path).open(mode))

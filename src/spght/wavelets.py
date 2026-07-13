@@ -44,7 +44,7 @@ haar = LiftingScheme(
 
 # the hierarchical hat basis == linear interpolet == lazy wavelet
 hierarchical_hat = LiftingScheme(
-    "hierarchical_hat",
+    "hat",
     (LiftingStep("predict", (0, 1), (0.5, 0.5)),),
     centering_kind="vertex",
     evaluation="nodal_linear",
@@ -63,7 +63,7 @@ cdf_2_2 = LiftingScheme(
 
 # cubic (Deslauriers-Dubuc order 4) interpolet
 cubic_interpolet = LiftingScheme(
-    "cubic_interpolet",
+    "cubic_interp",
     (LiftingStep("predict", (-1, 0, 1, 2), (-1 / 16, 9 / 16, 9 / 16, -1 / 16)),),
     centering_kind="vertex",
     evaluation=None,

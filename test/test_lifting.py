@@ -2,8 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
 import numpy as np
 import pytest
+import pywt
 
 from spght.basis import (
     CellCentered,
@@ -23,6 +25,7 @@ from spght.wavelets import (
     haar as haar_scheme,
     haar_basis,
     hat_basis,
+    half_haar,
     hierarchical_hat,
 )
 
@@ -69,15 +72,31 @@ def test_roundtrip_all_schemes_and_boundaries_1d(basis, extent, min_level_offset
     ids=["2d", "2d-min-level", "1d-min-level", "3d-min-level"],
 )
 def test_haar_basis_matches_pywt_half_haar(shape, min_level):
+    # the lifting Haar must stay equivalent to the pywt half_haar transform
+
     nodal_values = RNG.normal(size=shape)
-    via_pywt = hierarchize(nodal_values, min_level=min_level)
     via_lifting = hierarchize(nodal_values, wavelet=haar_basis(), min_level=min_level)
-    assert via_pywt.subspaces.keys() == via_lifting.subspaces.keys()
-    for level, subspace in via_pywt.subspaces.items():
+
+    num_dim = nodal_values.ndim
+    minimum = [min_level] * num_dim if isinstance(min_level, int) else list(min_level)
+    max_levels = [int(np.log2(extent)) for extent in shape]
+    blocks = [nodal_values]
+    for d in range(num_dim):
+        num_levels = max_levels[d] - minimum[d]
+        updated = []
+        for block in blocks:
+            if num_levels == 0:
+                updated.append(block)
+            else:
+                updated.extend(pywt.wavedec(block, half_haar, axis=d, level=num_levels))
+        blocks = updated
+    labels = itertools.product(
+        *(range(minimum[d], max_levels[d] + 1) for d in range(num_dim))
+    )
+    assert len(blocks) == len(via_lifting.subspaces)
+    for label, block in zip(labels, blocks):
         assert np.allclose(
-            subspace.data.to_dense(),
-            via_lifting.subspaces[level].data.to_dense(),
-            atol=1e-12,
+            via_lifting.subspaces[tuple(label)].data.to_dense(), block, atol=1e-12
         )
 
 

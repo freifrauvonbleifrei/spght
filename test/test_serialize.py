@@ -7,6 +7,7 @@ import io
 import numpy as np
 import pytest
 
+from spght.basis import Dirichlet, Neumann
 from spght.compress import compress
 from spght.data_structures import (
     SparseGridHierarchicalTensors,
@@ -14,9 +15,10 @@ from spght.data_structures import (
     TensorKind,
     subspace_order_key,
 )
-from spght.hierarchize import hierarchize
+from spght.hierarchize import hierarchize, dehierarchize
 from spght.serialize import _index_dtype
 from spght.tensor import DenseTensor, SparseTensor
+from spght.wavelets import cdf_2_2_basis, cubic_basis, hat_basis
 
 
 def _assert_equal_containers(
@@ -25,6 +27,7 @@ def _assert_equal_containers(
     assert actual.dimensions == expected.dimensions
     assert actual.max_level == tuple(int(level) for level in expected.max_level)
     assert actual.min_level == tuple(int(level) for level in expected.min_level)
+    assert actual.bases == expected.bases  # structural Basis1D equality
     assert list(actual.subspaces.keys()) == list(expected.subspaces.keys())
     for level, expected_subspace in expected.subspaces.items():
         actual_subspace = actual.subspaces[level]
@@ -32,27 +35,28 @@ def _assert_equal_containers(
         assert actual_subspace.precision_bits == expected_subspace.precision_bits
         assert actual_subspace.padding_bits == expected_subspace.padding_bits
         assert actual_subspace.compression == expected_subspace.compression
-        assert actual_subspace.quantization_scale == expected_subspace.quantization_scale
-        assert actual_subspace.quantization_offset == expected_subspace.quantization_offset
+        assert (
+            actual_subspace.quantization_scale == expected_subspace.quantization_scale
+        )
+        assert (
+            actual_subspace.quantization_offset == expected_subspace.quantization_offset
+        )
         assert (
             actual_subspace.quantization_parameter
             == expected_subspace.quantization_parameter
         )
-        assert actual_subspace.kind == expected_subspace.kind
         assert actual_subspace.order == expected_subspace.order
         if expected_subspace.data is None:
+            assert actual_subspace.kind == TensorKind.EMPTY
             assert actual_subspace.data is None
         else:
             assert actual_subspace.data is not None
             assert actual_subspace.data.dtype == expected_subspace.data.dtype
-            # bit-exact round-trip of the linear storage
+            # the on-disk kind is re-chosen at write time (whichever of
+            # FULL/LINEAR is smaller), so compare bit-exact dense views
             assert np.array_equal(
-                actual_subspace.data.linear_indices,
-                expected_subspace.data.linear_indices,
-            )
-            assert np.array_equal(
-                actual_subspace.data.linear_values,
-                expected_subspace.data.linear_values,
+                actual_subspace.data.to_dense(),
+                expected_subspace.data.to_dense(),
             )
 
 
@@ -113,9 +117,7 @@ def test_roundtrip_all_kinds_orders_and_dtypes(tmp_path):
                 extents=(2, 2),
                 precision_bits=8,
                 # int8-stored coefficients + the reserved quantization fields
-                data=DenseTensor.from_dense(
-                    np.array([[1, 2], [3, 4]], dtype=np.int8)
-                ),
+                data=DenseTensor.from_dense(np.array([[1, 2], [3, 4]], dtype=np.int8)),
                 quantization_scale=0.25,
                 quantization_offset=2.0,
                 quantization_parameter=-1.5,
@@ -136,6 +138,42 @@ def test_roundtrip_all_kinds_orders_and_dtypes(tmp_path):
         quantized.quantization_offset,
         quantized.quantization_parameter,
     ) == (0.25, 2.0, -1.5)
+
+
+def test_write_picks_cheapest_on_disk_kind():
+    almost_empty = np.zeros((4, 4))
+    almost_empty[2, 1] = 7.0
+    full = np.arange(1, 17, dtype=np.float64).reshape(4, 4)
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=2,
+        max_level=(2, 2),
+        subspaces={
+            (2, 1): Subspace(
+                extents=(4, 4),
+                precision_bits=64,
+                data=DenseTensor.from_dense(almost_empty),
+            ),
+            (2, 2): Subspace(
+                extents=(4, 4),
+                precision_bits=64,
+                data=SparseTensor.from_dense(full),
+            ),
+        },
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    loaded = SparseGridHierarchicalTensors.read(buffer)
+    # the dense-stored but nearly-empty subspace comes back sparse, the
+    # sparse-stored but fully-populated one comes back dense ...
+    assert loaded.subspaces[(2, 1)].kind == TensorKind.LINEAR
+    assert loaded.subspaces[(2, 2)].kind == TensorKind.FULL
+    # ... both with unchanged values
+    for level in tensors.subspaces:
+        assert np.array_equal(
+            loaded.subspaces[level].data.to_dense(),
+            tensors.subspaces[level].data.to_dense(),
+        )
 
 
 def test_roundtrip_min_level():
@@ -234,3 +272,84 @@ def test_index_dtype_is_minimal():
     assert _index_dtype((1 << 16) + 1) == np.dtype("<u4")
     assert _index_dtype(1 << 32) == np.dtype("<u4")
     assert _index_dtype((1 << 32) + 1) == np.dtype("<u8")
+
+
+def test_roundtrip_basis_descriptors():
+    rng = np.random.default_rng(13)
+    # anisotropic bases with a boundary rule that carries data (Dirichlet
+    # wall value) -> exercises the non-uniform basis block
+    bases = (
+        hat_basis(bc_left=Dirichlet(1.5), bc_right=Neumann()),
+        cdf_2_2_basis(),
+    )
+    nodal_values = rng.normal(size=(9, 17))  # vertex-centered: 2^l + 1
+    tensors = hierarchize(nodal_values, wavelet=bases)
+
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    loaded = SparseGridHierarchicalTensors.read(buffer)
+    _assert_equal_containers(tensors, loaded)
+    assert loaded.bases == bases
+
+    # the loaded container reconstructs WITHOUT the basis being passed again
+    assert np.allclose(dehierarchize(loaded), nodal_values, atol=1e-11)
+
+
+def test_roundtrip_uniform_basis_block_is_shared():
+    rng = np.random.default_rng(14)
+    basis = cubic_basis()
+    tensors = hierarchize(rng.normal(size=(17, 17)), wavelet=basis)
+    uniform_buffer = io.BytesIO()
+    tensors.write(uniform_buffer)
+
+    # same content with explicitly repeated (equal) bases must produce an
+    # identical file: the writer detects uniformity structurally
+    tensors_repeated = hierarchize(rng.normal(size=(17, 17)), wavelet=(basis, basis))
+    assert tensors_repeated.bases == tensors.bases
+
+    loaded = SparseGridHierarchicalTensors.read(io.BytesIO(uniform_buffer.getvalue()))
+    assert loaded.bases == (basis, basis)
+
+
+def test_periodic_basis_roundtrip():
+    rng = np.random.default_rng(15)
+    basis = cdf_2_2_basis(periodic=True)
+    nodal_values = rng.normal(size=16)  # periodic vertex grid: 2^l dofs
+    tensors = hierarchize(nodal_values, wavelet=basis)
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    loaded = SparseGridHierarchicalTensors.read(buffer)
+    assert loaded.bases == (basis,)
+    assert np.allclose(dehierarchize(loaded), nodal_values, atol=1e-11)
+
+
+def test_scheme_name_limited_to_15_characters():
+    from dataclasses import replace
+
+    from spght.lifting import Basis1D
+    from spght.wavelets import haar_basis
+
+    basis = haar_basis()
+    too_long = Basis1D(
+        basis.centering,
+        replace(basis.scheme, name="a" * 16),
+        basis.bc_left,
+        basis.bc_right,
+    )
+    tensors = hierarchize(np.zeros(4), wavelet=too_long)
+    with pytest.raises(ValueError, match="15 ascii characters"):
+        tensors.write(io.BytesIO())
+    # 15 characters are fine and round-trip
+    just_fits = Basis1D(
+        basis.centering,
+        replace(basis.scheme, name="a" * 15),
+        basis.bc_left,
+        basis.bc_right,
+    )
+    tensors = hierarchize(np.zeros(4), wavelet=just_fits)
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    assert SparseGridHierarchicalTensors.read(buffer).bases[0].scheme.name == "a" * 15
