@@ -74,7 +74,7 @@ def interpolate_single_coordinate(
     coordinate_np = np.asarray(coordinate)
     coordinate_np_two_d = coordinate_np.reshape(1, -1)
     # assert that all coordinates are within the unit hypercube [0, 1]^d
-    if not np.all(coordinate_np >= 0.0) and np.all(coordinate_np <= 1.0):
+    if not (np.all(coordinate_np >= 0.0) and np.all(coordinate_np <= 1.0)):
         raise ValueError("Coordinates must be within the unit hypercube [0, 1]^d")
     # iterate over the subspaces in the SparseGridHierarchicalTensors
     # and interpolate on each of them
@@ -96,13 +96,14 @@ def interpolate_many_coordinates(
     # assert that all coordinates are within the unit hypercube [0, 1]^d
 
     coordinates_np = np.asarray(coordinates)
-    if not np.all(coordinates_np >= 0.0) and np.all(coordinates_np <= 1.0):
+    if not (np.all(coordinates_np >= 0.0) and np.all(coordinates_np <= 1.0)):
         raise ValueError("Coordinates must be within the unit hypercube [0, 1]^d")
     *batch_shape, num_dims = coordinates_np.shape
 
     flat_coords = coordinates_np.reshape(-1, num_dims)
 
-    flat_values = np.zeros(flat_coords.shape[:-1], dtype=np.float32)
+    # Accumulate subspace contributions in double precision!
+    flat_values = np.zeros(flat_coords.shape[:-1], dtype=np.float64)
     for level, subspace in spghtensors.subspaces.items():
         flat_values += interpolate_subspace(
             level, flat_coords, subspace, wavelet=wavelet
