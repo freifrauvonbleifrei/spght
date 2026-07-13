@@ -34,10 +34,7 @@ def compress(
             compressed_tensors.subspaces[level] = deepcopy(subspace)
         else:
             # partial compression: keep only the surviving coefficients
-            if subspace.data.is_sparse:
-                keys = subspace.data.linear_indices[keep]
-            else:
-                keys = np.flatnonzero(keep)
+            keys = subspace.data.linear_indices[keep]
             compressed_data = make_tensor_from_linear(
                 keys,
                 coefficients[keep],

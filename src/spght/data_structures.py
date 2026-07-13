@@ -80,6 +80,13 @@ class Tensor(abc.ABC):
 
     @property
     @abc.abstractmethod
+    def linear_indices(self) -> npt.NDArray[np.int64]:
+        """Sorted linear indices of the stored entries, matching
+        linear_values; for a dense tensor that is simply all positions."""
+        ...
+
+    @property
+    @abc.abstractmethod
     def nbytes(self) -> int:
         """In-memory storage size: value buffer plus (if sparse) index buffer."""
         ...
@@ -223,6 +230,11 @@ class DenseTensor(Tensor):
     @property
     def linear_values(self) -> npt.NDArray:
         return self._flat
+
+    @property
+    def linear_indices(self) -> npt.NDArray[np.int64]:
+        """All positions: a dense tensor stores every entry."""
+        return np.arange(self.size, dtype=np.int64)
 
     @property
     def nbytes(self) -> int:

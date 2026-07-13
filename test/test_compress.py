@@ -125,5 +125,7 @@ def test_compress_partial_error_bounded():
     error_bound = epsilon * len(hierarchical.subspaces)
     assert np.max(np.abs(reconstructed - nodal_values)) <= error_bound
     # and something must actually have been compressed away
-    total = lambda t: sum(s.num_bytes for s in t.subspaces.values())
-    assert total(compressed) < total(hierarchical)
+    def total_bytes(tensors) -> int:
+        return sum(s.num_bytes for s in tensors.subspaces.values())
+
+    assert total_bytes(compressed) < total_bytes(hierarchical)
