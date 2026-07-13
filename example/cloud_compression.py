@@ -24,31 +24,6 @@ def levels_from_extent(extent: np.ndarray) -> np.ndarray:
     return np.array([int(math.ceil(math.log2(max(e, 1)))) for e in extent])
 
 
-def cast_precision(
-    tensors: spght.SparseGridHierarchicalTensors, precision_bits: int
-) -> spght.SparseGridHierarchicalTensors:
-    """Cast subspace coefficient values to the given float precision."""
-    dtype = {16: np.float16, 32: np.float32, 64: np.float64}[precision_bits]
-    for level, subspace in tensors.subspaces.items():
-        data = subspace.data
-        if data is not None and data.dtype != dtype:
-            if data.is_sparse:
-                data = spght.SparseTensor.from_linear(
-                    data.linear_indices,
-                    data.linear_values.astype(dtype),
-                    data.shape,
-                    order=data.order,
-                )
-            else:
-                data = spght.DenseTensor(
-                    data.linear_values.astype(dtype), data.shape, order=data.order
-                )
-        tensors.subspaces[level] = replace(
-            subspace, data=data, precision_bits=precision_bits
-        )
-    return tensors
-
-
 def spght_to_vdb_grid(
     hierarchical_tensors: spght.SparseGridHierarchicalTensors,
     bbox_min: np.ndarray,
