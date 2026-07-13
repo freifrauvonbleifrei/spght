@@ -9,6 +9,7 @@ from typing import Sequence
 
 
 from spght.data_structures import SparseGridHierarchicalTensors, Subspace
+from spght.lifting import as_bases, evaluate_block
 from spght.linearize import coordinates_to_multidim_indices
 from spght.wavelets import half_haar
 
@@ -73,6 +74,15 @@ def interpolate_subspace(
     assert len(coordinates.shape) == 2 and coordinates.shape[1] == num_dims
     assert len(scaling_dimensions) == num_dims
     assert subspace.data is not None
+    if not isinstance(wavelet, pywt.Wavelet):
+        # lifting basis: reconstruct detail dimensions one level, then
+        # evaluate with the basis' own stencils (constant / linear)
+        return evaluate_block(
+            scaling_dimensions,
+            coordinates,
+            subspace.data.to_dense(),
+            as_bases(wavelet, num_dims),
+        )
     if wavelet == half_haar:
         if subspace.data.is_sparse or coordinates.shape[0] < subspace.data.size:
             return _evaluate_subspace_haar(scaling_dimensions, coordinates, subspace)
