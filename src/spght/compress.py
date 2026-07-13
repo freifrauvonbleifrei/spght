@@ -18,14 +18,15 @@ def compress(
     compressed_tensors = SparseGridHierarchicalTensors(
         dimensions=hierarchical_tensors.dimensions,
         max_level=hierarchical_tensors.max_level,
+        min_level=hierarchical_tensors.min_level,
         subspaces=dict(),
     )
     for level, subspace in hierarchical_tensors.subspaces.items():
         assert subspace.data is not None
         coefficients = subspace.data.linear_values
         keep = np.abs(coefficients) > epsilon
-        if sum(level) == 0:
-            # always keep the lmin subspace
+        if level == hierarchical_tensors.min_level:
+            # always keep the all-scaling lmin subspace
             compressed_tensors.add_subspace(level, deepcopy(subspace))
         elif not keep.any():
             continue
@@ -51,7 +52,5 @@ def compress(
             max(levels) for levels in zip(*compressed_tensors.subspaces.keys())
         )
     else:
-        compressed_tensors.max_level = tuple(
-            0 for _ in range(compressed_tensors.dimensions)
-        )
+        compressed_tensors.max_level = tuple(compressed_tensors.min_level)
     return compressed_tensors

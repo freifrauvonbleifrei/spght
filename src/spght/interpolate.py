@@ -22,15 +22,16 @@ def iter_pole_slices(shape, axis):
 
 
 def interpolate_subspace(
-    level: Sequence[int],
+    scaling_dimensions: Sequence[bool],
     coordinates: npt.NDArray,
     subspace: Subspace,
     wavelet=half_haar,
 ) -> npt.NDArray:
-    # interpolate on a single subspace using the wavelet transform
+    """Interpolate on a single subspace using the wavelet transform."""
     # TODO reconstruct using only necessary coefficients
     num_dims = len(subspace.extents)
     assert len(coordinates.shape) == 2 and coordinates.shape[1] == num_dims
+    assert len(scaling_dimensions) == num_dims
     assert subspace.data is not None
     # the n-d view works for dense and sparse alike (dropped coefficients
     # read as zeros); the quantization fields are reserved and not yet applied
@@ -41,11 +42,7 @@ def interpolate_subspace(
         coeffs_detail_reconstructed = np.zeros(
             list(coeffs.shape[:d]) + [coeffs.shape[d] * 2] + list(coeffs.shape[d + 1 :])
         )
-        # TODO "scaling-ness" / lmin-ness as separate parameter
-        if level[d] == 0:
-            mode = "a"
-        else:
-            mode = "d"
+        mode = "a" if scaling_dimensions[d] else "d"
         for idx in iter_pole_slices(coeffs.shape, axis=d):
             coeffs_detail_reconstructed[idx] = pywt.upcoef(
                 part=mode,
@@ -83,7 +80,10 @@ def interpolate_single_coordinate(
     value: float = 0.0
     for level, subspace in spghtensors.subspaces.items():
         value += interpolate_subspace(
-            level, coordinate_np_two_d, subspace, wavelet=wavelet
+            spghtensors.scaling_dimensions(level),
+            coordinate_np_two_d,
+            subspace,
+            wavelet=wavelet,
         )[0]
 
     return value
@@ -108,7 +108,10 @@ def interpolate_many_coordinates(
     flat_values = np.zeros(flat_coords.shape[:-1], dtype=np.float64)
     for level, subspace in spghtensors.subspaces.items():
         flat_values += interpolate_subspace(
-            level, flat_coords, subspace, wavelet=wavelet
+            spghtensors.scaling_dimensions(level),
+            flat_coords,
+            subspace,
+            wavelet=wavelet,
         )
 
     return np.asarray(flat_values).reshape(batch_shape)

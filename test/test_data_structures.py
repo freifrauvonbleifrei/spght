@@ -293,3 +293,35 @@ def test_hierarchize_subspaces_canonically_ordered():
     assert keys == sorted(keys, key=subspace_order_key)
     assert keys[0] == (0, 0, 0)  # coarsest first
     assert keys[-1] == hierarchical_tensors.max_level  # finest last
+
+
+def test_min_level_and_scaling_dimensions():
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=2, max_level=(3, 3), min_level=(1, 2)
+    )
+    # scaling exactly where the level equals min_level
+    assert tensors.scaling_dimensions((1, 2)) == (True, True)
+    assert tensors.scaling_dimensions((1, 3)) == (True, False)
+    assert tensors.scaling_dimensions((3, 2)) == (False, True)
+    assert tensors.scaling_dimensions((3, 3)) == (False, False)
+
+    # default is all zeros
+    assert SparseGridHierarchicalTensors(
+        dimensions=3, max_level=(1, 1, 1)
+    ).min_level == (0, 0, 0)
+
+    with pytest.raises(ValueError):  # min_level must not exceed max_level
+        SparseGridHierarchicalTensors(dimensions=2, max_level=(1, 1), min_level=(2, 0))
+    with pytest.raises(ValueError):  # subspace keys must respect min_level
+        SparseGridHierarchicalTensors(
+            dimensions=2,
+            max_level=(2, 2),
+            min_level=(1, 1),
+            subspaces={
+                (0, 1): Subspace(
+                    extents=(1, 1),
+                    precision_bits=64,
+                    data=DenseTensor.from_dense(np.ones((1, 1))),
+                )
+            },
+        )

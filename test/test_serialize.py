@@ -20,6 +20,7 @@ def _assert_equal_containers(
 ) -> None:
     assert actual.dimensions == expected.dimensions
     assert actual.max_level == tuple(int(level) for level in expected.max_level)
+    assert actual.min_level == tuple(int(level) for level in expected.min_level)
     assert list(actual.subspaces.keys()) == list(expected.subspaces.keys())
     for level, expected_subspace in expected.subspaces.items():
         actual_subspace = actual.subspaces[level]
@@ -131,6 +132,20 @@ def test_roundtrip_all_kinds_orders_and_dtypes(tmp_path):
         quantized.quantization_offset,
         quantized.quantization_parameter,
     ) == (0.25, 2.0, -1.5)
+
+
+def test_roundtrip_min_level():
+    nodal_values = np.random.default_rng(4).random((8, 8))
+    tensors = hierarchize(nodal_values, min_level=(1, 2))
+    assert tensors.min_level == (1, 2)
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    loaded = SparseGridHierarchicalTensors.read(buffer)
+    _assert_equal_containers(tensors, loaded)
+    # scaling-ness is derived identically on both sides
+    for level in tensors.subspaces:
+        assert loaded.scaling_dimensions(level) == tensors.scaling_dimensions(level)
 
 
 def test_roundtrip_empty_container():

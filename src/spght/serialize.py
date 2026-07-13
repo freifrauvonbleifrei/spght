@@ -8,6 +8,11 @@ File header:
     num dimensions         uint16
     num subspaces          uint64
     max level              uint8 per dimension
+    min level              uint8 per dimension; where the wavelet cascade
+                           stops: along dimension d, a subspace with
+                           level[d] == min_level[d] holds scaling
+                           (approximation) coefficients, all finer levels
+                           hold detail coefficients
     subspace table         one entry per subspace, in the canonical
                            (level sum, lexicographic) order:
                                level vector    uint8 per dimension
@@ -56,7 +61,7 @@ from spght.linearize import Order
 from spght.tensor import DenseTensor, SparseTensor, Tensor, TensorKind
 
 FormatMagic = b"sparse grid hierarchical tensors\0"
-FormatVersion: tuple[int, int] = (0, 1)
+FormatVersion: tuple[int, int] = (0, 2)
 
 _ORDER_TO_CODE: dict[Order, int] = {"C": 0, "F": 1, "ZC": 2, "ZF": 3}
 _CODE_TO_ORDER: dict[int, Order] = {c: o for o, c in _ORDER_TO_CODE.items()}
@@ -196,7 +201,7 @@ def write(
     num_dims = tensors.dimensions
     if not 1 <= num_dims <= 65535:
         raise ValueError(f"Number of dimensions must fit in uint16, got {num_dims}")
-    for level in (*tensors.subspaces.keys(), tensors.max_level):
+    for level in (*tensors.subspaces.keys(), tensors.max_level, tensors.min_level):
         if any(not 0 <= single_level <= 255 for single_level in level):
             raise ValueError(f"Levels must fit in one byte each, got {level}")
 
@@ -205,7 +210,10 @@ def write(
     ]
     table_entry = struct.Struct(f"<{num_dims}BQ")
     header_size = (
-        _HEADER.size + num_dims + len(records) * table_entry.size + _HEADER_CRC.size
+        _HEADER.size
+        + 2 * num_dims  # max level + min level
+        + len(records) * table_entry.size
+        + _HEADER_CRC.size
     )
 
     table = b""
@@ -217,6 +225,7 @@ def write(
     header = (
         _HEADER.pack(FormatMagic, *FormatVersion, num_dims, len(records))
         + struct.pack(f"<{num_dims}B", *tensors.max_level)
+        + struct.pack(f"<{num_dims}B", *tensors.min_level)
         + table
     )
     stream, should_close = _open_stream(target, "wb")
@@ -246,17 +255,20 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
 
         table_entry = struct.Struct(f"<{num_dims}BQ")
         header_rest = _read_exactly(
-            stream, num_dims + num_subspaces * table_entry.size
+            stream, 2 * num_dims + num_subspaces * table_entry.size
         )
         (header_crc,) = _HEADER_CRC.unpack(_read_exactly(stream, _HEADER_CRC.size))
         if zlib.crc32(fixed_header + header_rest) != header_crc:
             raise ValueError("File header failed its checksum")
 
         max_level = struct.unpack(f"<{num_dims}B", header_rest[:num_dims])
+        min_level = struct.unpack(
+            f"<{num_dims}B", header_rest[num_dims : 2 * num_dims]
+        )
         table: list[tuple[tuple[int, ...], int]] = []
         for i in range(num_subspaces):
             entry = table_entry.unpack_from(
-                header_rest, num_dims + i * table_entry.size
+                header_rest, 2 * num_dims + i * table_entry.size
             )
             table.append((entry[:-1], entry[-1]))
 
@@ -271,5 +283,6 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
     return SparseGridHierarchicalTensors(
         dimensions=num_dims,
         max_level=tuple(max_level),
+        min_level=tuple(min_level),
         subspaces=subspaces,
     )
