@@ -18,7 +18,7 @@ from spght.data_structures import (
     Subspace,
     subspace_order_key,
 )
-from spght.hierarchize import hierarchize
+from spght.hierarchize import dehierarchize, hierarchize
 from spght.interpolate import interpolate
 from spght.linearize import Order, midpoint_coordinates_from_level
 from spght.serialize import read, write
@@ -39,6 +39,7 @@ __all__ = [
     "TensorKind",
     "__version__",
     "compress",
+    "dehierarchize",
     "hierarchize",
     "interpolate",
     "midpoint_coordinates_from_level",

@@ -76,3 +76,52 @@ def hierarchize(
             for lv, v in zip(subspace_levels, modified_values)
         },
     )
+
+
+def dehierarchize(
+    hierarchical_tensors: data_structures.SparseGridHierarchicalTensors,
+    wavelet: pywt.Wavelet = half_haar,
+) -> npt.NDArray:
+    """Inverse of hierarchize: synthesize the full grid of nodal values."""
+    num_dim = hierarchical_tensors.dimensions
+    min_level = hierarchical_tensors.min_level
+    max_level = hierarchical_tensors.max_level
+
+    band_extents: list[dict[int, int]] = [dict() for _ in range(num_dim)]
+    for stored_level, subspace in hierarchical_tensors.subspaces.items():
+        for d in range(num_dim):
+            band_extents[d][stored_level[d]] = subspace.extents[d]
+
+    # dyadic sizes as fallback for bands in which every subspace was dropped
+    def block_extents(level: tuple[int, ...]) -> tuple[int, ...]:
+        return tuple(
+            band_extents[d].get(
+                level[d],
+                2 ** level[d] if level[d] == min_level[d] else 2 ** (level[d] - 1),
+            )
+            for d in range(num_dim)
+        )
+
+    # coefficient blocks in the same C-order the forward transform produces
+    blocks = []
+    for level in itertools.product(
+        *(range(min_level[d], max_level[d] + 1) for d in range(num_dim))
+    ):
+        stored = hierarchical_tensors.subspaces.get(level)
+        if stored is None or stored.data is None:
+            blocks.append(np.zeros(block_extents(level)))
+        else:
+            blocks.append(stored.data.to_dense())
+
+    # reverse order of the forward loop
+    for d in reversed(range(num_dim)):
+        num_bands = max_level[d] - min_level[d] + 1
+        if num_bands == 1:
+            continue
+        blocks = [
+            pywt.waverec(blocks[start : start + num_bands], wavelet, axis=d)
+            for start in range(0, len(blocks), num_bands)
+        ]
+
+    assert len(blocks) == 1
+    return blocks[0]
