@@ -13,6 +13,7 @@ from typing import BinaryIO, Sequence
 from spght.lifting import Basis1D
 from spght.linearize import Order
 from spght.tensor import Tensor, TensorKind
+from spght.util import per_dimension
 from spght.wavelets import haar_basis
 
 
@@ -25,10 +26,9 @@ class Subspace:
     # a custom precision is not (yet) enforced
     precision_bits: int
     data: Tensor | None = None
-    # three quantization parameters, reserved for future use
+    # two quantization parameters, reserved for future use
     quantization_scale: float = 1.0
     quantization_offset: float = 0.0
-    quantization_parameter: float = 0.0
     padding_bits: int = 0
     compression: int = 0
 
@@ -81,14 +81,18 @@ class SparseGridHierarchicalTensors:
     def __post_init__(self) -> None:
         if len(self.max_level) != self.dimensions:
             raise ValueError("max_level dimensionality does not match container")
-        if self.min_level == ():
-            self.min_level = tuple(0 for _ in range(self.dimensions))
-        if len(self.min_level) != self.dimensions:
-            raise ValueError("min_level dimensionality does not match container")
-        if self.bases == ():
-            self.bases = (haar_basis(),) * self.dimensions
-        if len(self.bases) != self.dimensions:
-            raise ValueError("bases dimensionality does not match container")
+        self.min_level = per_dimension(
+            self.min_level if self.min_level != () else 0,
+            int,
+            self.dimensions,
+            "min_level",
+        )
+        self.bases = per_dimension(
+            self.bases if self.bases != () else haar_basis(),
+            Basis1D,
+            self.dimensions,
+            "basis",
+        )
         if any(
             minimum > maximum
             for minimum, maximum in zip(self.min_level, self.max_level)

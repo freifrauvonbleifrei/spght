@@ -21,6 +21,7 @@ from spght.basis import (
     VertexCentered,
     WallType,
 )
+from spght.util import per_dimension
 
 
 @dataclass(frozen=True)
@@ -91,14 +92,7 @@ BasisLike = Union[Basis1D, Sequence[Basis1D]]
 
 def as_bases(basis: BasisLike, num_dim: int) -> tuple[Basis1D, ...]:
     """Normalize a single basis or a per-dimension sequence to a tuple."""
-    if isinstance(basis, Basis1D):
-        return (basis,) * num_dim
-    bases = tuple(basis)
-    if len(bases) != num_dim or not all(isinstance(b, Basis1D) for b in bases):
-        raise ValueError(
-            f"expected one Basis1D or a sequence of {num_dim}, got {basis!r}"
-        )
-    return bases
+    return per_dimension(basis, Basis1D, num_dim, "Basis1D")
 
 
 def _padded(

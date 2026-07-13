@@ -99,6 +99,7 @@ from spght.data_structures import (
 from spght.lifting import Basis1D, LiftingScheme, LiftingStep
 from spght.linearize import Order
 from spght.tensor import DenseTensor, SparseTensor, Tensor, TensorKind
+from spght.util import per_dimension
 
 FormatMagic = b"sparse grid hierarchical tensors\0"
 FormatVersion: tuple[int, int] = (0, 3)
@@ -252,7 +253,7 @@ def _decode_basis_block(block: bytes, num_dims: int) -> tuple[Basis1D, ...]:
     pos = 1
     if uniformity == 1:
         basis, pos = _decode_basis(block, pos)
-        bases = (basis,) * num_dims
+        bases = per_dimension(basis, Basis1D, num_dims, "basis")
     elif uniformity == 0:
         collected = []
         for _ in range(num_dims):
