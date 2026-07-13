@@ -18,13 +18,8 @@ from spght.lifting import (
     reconstruct_axis,
 )
 from spght.tensor import DenseTensor
+from spght.util import per_dimension
 from spght.wavelets import haar_basis
-
-
-def _normalized_min_level(min_level: int | Sequence[int], num_dim: int) -> list[int]:
-    if isinstance(min_level, int):
-        return [min_level] * num_dim
-    return list(min_level)
 
 
 def hierarchize(
@@ -38,7 +33,7 @@ def hierarchize(
     cell-centered Haar basis. The basis is recorded on the returned
     container, so reconstruction does not need it passed again."""
     num_dim = nodal_values.ndim
-    minimum_levels = _normalized_min_level(min_level, num_dim)
+    minimum_levels = per_dimension(min_level, int, num_dim, "min_level")
     level: npt.NDArray = np.ndarray(num_dim, dtype=int)
 
     if wavelet is None:
@@ -73,7 +68,7 @@ def hierarchize(
     return data_structures.SparseGridHierarchicalTensors(
         dimensions=num_dim,
         max_level=tuple(level),
-        min_level=tuple(minimum_levels),
+        min_level=minimum_levels,
         bases=bases,
         subspaces={
             # construction from a full array always yields dense (linear)

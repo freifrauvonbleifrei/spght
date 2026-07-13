@@ -19,9 +19,11 @@ from spght.compress import compress
 from spght.hierarchize import dehierarchize, hierarchize
 from spght.interpolate import interpolate
 from spght.lifting import Basis1D
+from spght.util import per_dimension
 from spght.wavelets import (
     cdf_2_2_basis,
     cubic_basis,
+    cubic_interpolet,
     haar as haar_scheme,
     haar_basis,
     hat_basis,
@@ -46,6 +48,11 @@ def all_bases_1d():
         yield cubic_basis(bc, bc), 17
     yield hat_basis(include_boundary=False), 15
     yield hat_basis(Dirichlet(1.0), Dirichlet(4.0), include_boundary=False), 15
+    # wide stencil on an interior-only grid: exercises the deep Dirichlet
+    # antireflection ghosts beyond the wall value itself
+    yield Basis1D(
+        VertexCentered(False), cubic_interpolet, Dirichlet(0.7), Dirichlet(0.7)
+    ), 15
     yield hat_basis(periodic=True), 16
     yield cdf_2_2_basis(periodic=True), 16
     yield cubic_basis(periodic=True), 16
@@ -288,6 +295,15 @@ def test_cubic_interpolation_not_supported():
     hierarchical = hierarchize(values, wavelet=basis)
     with pytest.raises(NotImplementedError, match="evaluation"):
         interpolate(np.array([0.3]), hierarchical, wavelet=basis)
+
+
+def test_per_dimension_rejects_mismatched_sequences():
+    with pytest.raises(ValueError, match="sequence of 3"):
+        per_dimension((1, 2), int, 3, "min_level")
+    with pytest.raises(ValueError, match="one basis"):
+        per_dimension((1, 2), Basis1D, 2, "basis")
+    with pytest.raises(ValueError, match="sequence of 2"):
+        hierarchize(RNG.normal(size=(16, 16)), wavelet=(haar_basis(),))
 
 
 def test_basis_validation():
