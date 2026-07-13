@@ -19,7 +19,7 @@ from spght.data_structures import (
 )
 from spght.hierarchize import hierarchize
 from spght.interpolate import interpolate
-from spght.linearize import Order
+from spght.linearize import Order, midpoint_coordinates_from_level
 from spght.serialize import read, write
 from spght.tensor import DenseTensor, SparseTensor, Tensor, TensorKind
 
@@ -40,6 +40,7 @@ __all__ = [
     "compress",
     "hierarchize",
     "interpolate",
+    "midpoint_coordinates_from_level",
     "read",
     "subspace_order_key",
     "write",
