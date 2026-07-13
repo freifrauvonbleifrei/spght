@@ -42,3 +42,15 @@ jobs:
           python3 cloud_compression.py \
               --epsilon=0.01 \
               wdas_cloud/wdas_cloud_sixteenth.vdb
+
+      - name: Evaluate errors against the original cloud
+        run: |
+          python3 openvdb_error_evaluation.py \
+              wdas_cloud/wdas_cloud_sixteenth.vdb \
+              spght_0.01_wdas_cloud_sixteenth.vdb
+
+      - name: Upload error evaluation CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-evaluation
+          path: example/error_evaluation.csv
