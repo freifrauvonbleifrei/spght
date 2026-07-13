@@ -15,9 +15,6 @@ from spght.linearize import (
     multidim_indices_to_indices,
 )
 
-FormatMagic = b"sparse grid hierarchical tensors\0"
-FormatVersion: tuple[int, int] = (0, 1)
-
 
 class TensorKind(IntEnum):
     """Storage kind of a tensor's linear buffer. Enumerable so that further
