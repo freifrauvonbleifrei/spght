@@ -8,53 +8,86 @@ import itertools
 import numpy as np
 import numpy.typing as npt
 import pywt
-from typing import Sequence
+from typing import Sequence, TypeAlias
 
 import spght.data_structures as data_structures
+from spght.lifting import (
+    Basis1D,
+    BasisLike,
+    as_bases,
+    decompose_axis,
+    reconstruct_axis,
+)
 from spght.linearize import level_from_extent
 from spght.tensor import DenseTensor
 from spght.wavelets import half_haar
 
+Wavelet: TypeAlias = pywt.Wavelet | BasisLike
+
+
+def _normalized_min_level(min_level: int | Sequence[int], num_dim: int) -> list[int]:
+    if isinstance(min_level, int):
+        return [min_level] * num_dim
+    return list(min_level)
+
 
 def hierarchize(
     nodal_values: npt.NDArray,
-    wavelet: pywt.Wavelet = half_haar,
+    wavelet: Wavelet = half_haar,
     min_level: int | Sequence[int] = 0,
 ) -> data_structures.SparseGridHierarchicalTensors:
     """Decompose nodal values into hierarchical subspaces."""
     num_dim = nodal_values.ndim
-    if isinstance(min_level, int):
-        minimum_levels = [min_level] * num_dim
-    else:
-        minimum_levels = list(min_level)
+    minimum_levels = _normalized_min_level(min_level, num_dim)
     level: npt.NDArray = np.ndarray(num_dim, dtype=int)
-    for d in range(num_dim):
-        level[d] = level_from_extent(nodal_values.shape[d])
-        if not 0 <= minimum_levels[d] <= level[d]:
-            raise ValueError(
-                f"min_level {minimum_levels} must be between 0 and the "
-                f"maximum level {tuple(level[: d + 1])} in every dimension"
-            )
 
-    modified_values = [nodal_values.copy()]
-    for d in range(num_dim):
-        # Apply the wavelet transform along each dimension, stopping the
-        # cascade at min_level
-        num_levels = int(level[d]) - minimum_levels[d]
-        updated_values = []
-        for slices in modified_values:
-            if num_levels == 0:
-                updated_values.append(slices)
-            else:
-                updated_values.extend(
-                    pywt.wavedec(slices, wavelet, axis=d, level=num_levels)
+    if isinstance(wavelet, pywt.Wavelet):
+        for d in range(num_dim):
+            level[d] = level_from_extent(nodal_values.shape[d])
+            if not 0 <= minimum_levels[d] <= level[d]:
+                raise ValueError(
+                    f"min_level {minimum_levels} must be between 0 and the "
+                    f"maximum level {tuple(level[: d + 1])} in every dimension"
                 )
-        modified_values = updated_values
+
+        modified_values = [nodal_values.copy()]
+        for d in range(num_dim):
+            # Apply the wavelet transform along each dimension, stopping the
+            # cascade at min_level
+            num_levels = int(level[d]) - minimum_levels[d]
+            updated_values = []
+            for slices in modified_values:
+                if num_levels == 0:
+                    updated_values.append(slices)
+                else:
+                    updated_values.extend(
+                        pywt.wavedec(slices, wavelet, axis=d, level=num_levels)
+                    )
+            modified_values = updated_values
+    else:
+        bases = as_bases(wavelet, num_dim)
+        for d in range(num_dim):
+            level[d] = bases[d].centering.level_from_num_dofs(nodal_values.shape[d])
+            lowest = bases[d].centering.lowest_min_level
+            if not lowest <= minimum_levels[d] <= level[d]:
+                raise ValueError(
+                    f"min_level {minimum_levels} must be between {lowest} and "
+                    f"the maximum level {tuple(level[: d + 1])} in every dimension"
+                )
+
+        modified_values = [nodal_values]
+        for d in range(num_dim):
+            updated_values = []
+            for slices in modified_values:
+                updated_values.extend(
+                    decompose_axis(slices, d, bases[d], minimum_levels[d])
+                )
+            modified_values = updated_values
 
     # construct a matching list of subspace levels: tensor product of 1D levels
     # from min_level[d] to level[d] for each dimension d. The order must match
-    # the order in which `modified_values` was built by the nested wavedec loop
-    # above, i.e. C-order (wavedec returns the coarsest block first).
+    # the order in which `modified_values` was built by the nested transform
+    # loop above, i.e. C-order (the coarsest block comes first).
     subspace_levels = list(
         itertools.product(
             *(range(minimum_levels[d], level[d] + 1) for d in range(num_dim))
@@ -80,25 +113,34 @@ def hierarchize(
 
 def dehierarchize(
     hierarchical_tensors: data_structures.SparseGridHierarchicalTensors,
-    wavelet: pywt.Wavelet = half_haar,
+    wavelet: Wavelet = half_haar,
 ) -> npt.NDArray:
     """Inverse of hierarchize: synthesize the full grid of nodal values."""
     num_dim = hierarchical_tensors.dimensions
     min_level = hierarchical_tensors.min_level
     max_level = hierarchical_tensors.max_level
+    bases: tuple[Basis1D, ...] | None = (
+        None if isinstance(wavelet, pywt.Wavelet) else as_bases(wavelet, num_dim)
+    )
 
     band_extents: list[dict[int, int]] = [dict() for _ in range(num_dim)]
     for stored_level, subspace in hierarchical_tensors.subspaces.items():
         for d in range(num_dim):
             band_extents[d][stored_level[d]] = subspace.extents[d]
 
-    # dyadic sizes as fallback for bands in which every subspace was dropped
+    # per-basis band sizes as fallback for bands in which every subspace was
+    # dropped
+    def default_band_extent(d: int, band_level: int) -> int:
+        if bases is not None:
+            centering = bases[d].centering
+            if band_level == min_level[d]:
+                return centering.num_dofs(band_level)
+            return centering.num_details(band_level)
+        return 2**band_level if band_level == min_level[d] else 2 ** (band_level - 1)
+
     def block_extents(level: tuple[int, ...]) -> tuple[int, ...]:
         return tuple(
-            band_extents[d].get(
-                level[d],
-                2 ** level[d] if level[d] == min_level[d] else 2 ** (level[d] - 1),
-            )
+            band_extents[d].get(level[d], default_band_extent(d, level[d]))
             for d in range(num_dim)
         )
 
@@ -118,10 +160,16 @@ def dehierarchize(
         num_bands = max_level[d] - min_level[d] + 1
         if num_bands == 1:
             continue
-        blocks = [
-            pywt.waverec(blocks[start : start + num_bands], wavelet, axis=d)
-            for start in range(0, len(blocks), num_bands)
-        ]
+        if bases is not None:
+            blocks = [
+                reconstruct_axis(blocks[start : start + num_bands], d, bases[d])
+                for start in range(0, len(blocks), num_bands)
+            ]
+        else:
+            blocks = [
+                pywt.waverec(blocks[start : start + num_bands], wavelet, axis=d)
+                for start in range(0, len(blocks), num_bands)
+            ]
 
     assert len(blocks) == 1
     return blocks[0]
