@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Theresa Pollinger
+#
+# SPDX-License-Identifier: CC-BY-4.0
+
 name: cloud-openvdb-env
 channels:
   - conda-forge

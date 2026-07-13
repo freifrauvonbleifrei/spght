@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Theresa Pollinger
+#
+# SPDX-License-Identifier: CC-BY-4.0
+
 name: WDAS Cloud Compression
 
 on:

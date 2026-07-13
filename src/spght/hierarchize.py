@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Theresa Pollinger
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Hierarchize a multi-dimensional function on a structured grid using the unidirectional principle.
 
 import itertools

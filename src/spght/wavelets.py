@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Theresa Pollinger
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import pywt
 
 

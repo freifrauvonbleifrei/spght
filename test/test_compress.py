@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Theresa Pollinger
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import numpy as np
 
 from spght.compress import compress
@@ -158,3 +162,12 @@ def test_compress_with_min_level():
     nodal_values = interpolate(midpoints, hierarchical)
     error_bound = epsilon * len(hierarchical.subspaces)
     assert np.max(np.abs(reconstructed - nodal_values)) <= error_bound
+    # the reconstruction error is equal or smaller than with min_level=0:
+    # the always-kept lmin subspace holds more coefficients, and the levels
+    # below it are never thresholded away
+    hierarchical_no_min_level = hierarchize(interpolate(midpoints, hierarchical))
+    compressed_no_min_level = compress(hierarchical_no_min_level, epsilon=epsilon)
+    reconstructed_no_min_level = interpolate(midpoints, compressed_no_min_level)
+    assert np.max(np.abs(reconstructed - nodal_values)) <= np.max(
+        np.abs(reconstructed_no_min_level - nodal_values)
+    )
