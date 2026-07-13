@@ -226,7 +226,7 @@ def midpoint_coordinates_from_level(
 ) -> npt.NDArray[np.float64]:
     """Cell-midpoint coordinates in [0, 1]^d for a full grid of the given level."""
     dimensionality = len(level)
-    extents = np.array([extent_from_level(l) for l in level], dtype=np.int64)
+    extents = np.array([extent_from_level(lvl) for lvl in level], dtype=np.int64)
     unit_voxel_size = np.ones((dimensionality,), dtype=np.float64) / extents
     stacked_indices = np.meshgrid(
         *[np.arange(extent) for extent in extents],

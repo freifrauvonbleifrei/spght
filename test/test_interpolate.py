@@ -136,7 +136,7 @@ def test_interpolate_fine_scale_random():
     np.random.seed(0)
     for level in ([10], [6, 6], [6, 6, 6]):
         dimensionality = len(level)
-        extents = [extent_from_level(l) for l in level]
+        extents = [extent_from_level(lvl) for lvl in level]
         nodal_values = np.random.rand(*extents).astype(np.float64)
         hierarchical_tensors = hierarchize(nodal_values)
         midpoints = midpoint_coordinates_from_level(level)
