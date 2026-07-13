@@ -20,7 +20,15 @@ from typing import Literal
 import numpy as np
 import numpy.typing as npt
 
-WallType = Literal["node", "half", "offset"]
+WallType = Literal["node", "half", "offset", "wrap"]
+
+
+def _require_wall(wall: WallType, rule_name: str) -> None:
+    if wall == "wrap":
+        raise ValueError(
+            f"{rule_name} ghosts are undefined on a periodic grid; "
+            "use the Periodic rule"
+        )
 
 
 def _take(arr: npt.NDArray, index: int, axis: int) -> npt.NDArray:
@@ -55,8 +63,10 @@ class BoundaryRule(abc.ABC):
 
 
 class Periodic(BoundaryRule):
-    """Wrap-around extension. Note that a 'node' wall stores the seam value
-    at both ends (arr[0] == arr[-1]), so the period is extent - 1 there."""
+    """Wrap-around extension. The natural pairing is the periodic vertex
+    centering ('wrap' walls, seam node stored once at the lower end). A
+    'node' wall stores the seam value at both ends (arr[0] == arr[-1]), so
+    the period is extent - 1 there."""
 
     def ghost_slab(self, arr, position, wall, axis):
         period = arr.shape[axis] - 1 if wall == "node" else arr.shape[axis]
@@ -67,6 +77,7 @@ class Neumann(BoundaryRule):
     """Mirror extension: zero normal derivative at the wall."""
 
     def ghost_slab(self, arr, position, wall, axis):
+        _require_wall(wall, "Neumann")
         extent = arr.shape[axis]
         if wall == "node":  # whole-sample symmetry about the wall dof
             index = -position if position < 0 else 2 * (extent - 1) - position
@@ -82,6 +93,7 @@ class Dirichlet(BoundaryRule):
     value: float = 0.0
 
     def ghost_slab(self, arr, position, wall, axis):
+        _require_wall(wall, "Dirichlet")
         extent = arr.shape[axis]
         if wall == "offset":
             # the wall itself sits one dof spacing outside the array
@@ -107,6 +119,7 @@ class Extrapolate(BoundaryRule):
     """Linear extrapolation from the two edge dofs ("free" boundary)."""
 
     def ghost_slab(self, arr, position, wall, axis):
+        _require_wall(wall, "Extrapolate")
         extent = arr.shape[axis]
         if extent == 1:
             return _take(arr, 0, axis)
@@ -188,22 +201,38 @@ class CellCentered(Centering):
 
 
 class VertexCentered(Centering):
-    """Dofs on the grid vertices i / 2**level"""
+    """Dofs on the grid vertices i / 2**level."""
 
-    odd_wall: WallType = "half"
-
-    def __init__(self, include_boundary: bool = True):
+    def __init__(self, include_boundary: bool = True, periodic: bool = False):
+        if periodic and not include_boundary:
+            raise ValueError(
+                "a periodic vertex grid already stores no upper boundary node"
+            )
         self.include_boundary = include_boundary
-        self.name = "vertex" if include_boundary else "vertex-interior"
-        self.even_first = include_boundary
-        self.even_shift = 0 if include_boundary else -1
-        self.odd_shift = 0 if include_boundary else 1
-        self.even_wall: WallType = "node" if include_boundary else "offset"
-        self.lowest_min_level = 0 if include_boundary else 1
+        self.periodic = periodic
+        self.odd_wall: WallType = "wrap" if periodic else "half"
+        if periodic:
+            self.name = "vertex-periodic"
+            self.even_first = True
+            self.even_shift = 0
+            self.odd_shift = 0
+            self.even_wall: WallType = "wrap"
+            self.lowest_min_level = 0
+        else:
+            self.name = "vertex" if include_boundary else "vertex-interior"
+            self.even_first = include_boundary
+            self.even_shift = 0 if include_boundary else -1
+            self.odd_shift = 0 if include_boundary else 1
+            self.even_wall = "node" if include_boundary else "offset"
+            self.lowest_min_level = 0 if include_boundary else 1
 
     def num_dofs(self, level: int) -> int:
+        if self.periodic:
+            return 2**level
         return 2**level + 1 if self.include_boundary else 2**level - 1
 
     def coordinates(self, level: int) -> npt.NDArray[np.float64]:
+        if self.periodic:
+            return np.arange(2**level) / 2**level
         nodes = np.arange(2**level + 1) / 2**level
         return nodes if self.include_boundary else nodes[1:-1]
