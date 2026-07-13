@@ -3,7 +3,6 @@ The binary encoding details may still evolve.
 """
 
 from dataclasses import dataclass, field
-import numpy.typing as npt
 from pathlib import Path
 from typing import BinaryIO, Sequence, cast
 
