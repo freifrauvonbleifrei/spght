@@ -3,11 +3,12 @@
 import itertools
 import numpy as np
 import numpy.typing as npt
-import spght.data_structures as data_structures
 import pywt
 from typing import Sequence
 
+import spght.data_structures as data_structures
 from spght.linearize import level_from_extent
+from spght.tensor import DenseTensor
 from spght.wavelets import half_haar
 
 
@@ -54,7 +55,7 @@ def hierarchize(
             tuple(lv): data_structures.Subspace(
                 extents=v.shape,
                 precision_bits=64,
-                data=data_structures.DenseTensor.from_dense(v),
+                data=DenseTensor.from_dense(v),
             )
             for lv, v in zip(subspace_levels, modified_values)
         },

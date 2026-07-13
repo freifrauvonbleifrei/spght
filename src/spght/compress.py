@@ -3,10 +3,9 @@ from dataclasses import replace
 import numpy as np
 
 
-from spght.data_structures import (
-    SparseGridHierarchicalTensors,
-    make_tensor_from_linear,
-)
+from spght.data_structures import SparseGridHierarchicalTensors
+
+from spght.tensor import make_tensor_from_linear
 
 
 def compress(
@@ -27,11 +26,11 @@ def compress(
         keep = np.abs(coefficients) > epsilon
         if sum(level) == 0:
             # always keep the lmin subspace
-            compressed_tensors.subspaces[level] = deepcopy(subspace)
+            compressed_tensors.add_subspace(level, deepcopy(subspace))
         elif not keep.any():
             continue
         elif keep.all() or only_whole_subspaces:
-            compressed_tensors.subspaces[level] = deepcopy(subspace)
+            compressed_tensors.add_subspace(level, deepcopy(subspace))
         else:
             # partial compression: keep only the surviving coefficients
             keys = subspace.data.linear_indices[keep]
@@ -42,8 +41,8 @@ def compress(
                 order=subspace.data.order,
                 density_threshold=density_threshold,
             )
-            compressed_tensors.subspaces[level] = replace(
-                subspace, data=compressed_data
+            compressed_tensors.add_subspace(
+                level, replace(subspace, data=compressed_data)
             )
 
     # the maximum level is the elementwise maximum over the kept subspaces

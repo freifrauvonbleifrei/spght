@@ -2,7 +2,6 @@ import numpy as np
 
 from spght.compress import compress
 from spght.data_structures import (
-    DenseTensor,
     SparseGridHierarchicalTensors,
     Subspace,
     TensorKind,
@@ -10,6 +9,7 @@ from spght.data_structures import (
 from spght.hierarchize import hierarchize
 from spght.interpolate import interpolate
 from spght.linearize import midpoint_coordinates_from_level
+from spght.tensor import DenseTensor
 
 
 def _subspace(array) -> Subspace:
@@ -109,6 +109,16 @@ def test_compress_always_keeps_lmin():
     assert compressed.max_level == (0, 0)
 
 
+def test_compress_preserves_canonical_order():
+    from spght.data_structures import subspace_order_key
+
+    rng = np.random.default_rng(5)
+    hierarchical = hierarchize(rng.random((8, 8)))
+    compressed = compress(hierarchical, epsilon=0.05)
+    keys = list(compressed.subspaces.keys())
+    assert keys == sorted(keys, key=subspace_order_key)
+
+
 def test_compress_partial_error_bounded():
     rng = np.random.default_rng(3)
     level = [5, 5, 5]
@@ -124,6 +134,7 @@ def test_compress_partial_error_bounded():
     # dropped coefficient adds at most epsilon
     error_bound = epsilon * len(hierarchical.subspaces)
     assert np.max(np.abs(reconstructed - nodal_values)) <= error_bound
+
     # and something must actually have been compressed away
     def total_bytes(tensors) -> int:
         return sum(s.num_bytes for s in tensors.subspaces.values())
