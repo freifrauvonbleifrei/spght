@@ -49,10 +49,12 @@ def hierarchize(
         dimensions=num_dim,
         max_level=tuple(level),
         subspaces={
+            # construction from a full array always yields dense (linear)
+            # storage; sparsification only happens in compress()
             tuple(lv): data_structures.Subspace(
                 extents=v.shape,
                 precision_bits=64,
-                values=v,  # modified_values.tobytes(),
+                data=data_structures.DenseTensor.from_dense(v),
             )
             for lv, v in zip(subspace_levels, modified_values)
         },

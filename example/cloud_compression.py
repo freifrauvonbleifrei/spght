@@ -77,11 +77,20 @@ if __name__ == "__main__":
 
     # Hierarchize the tensor
     hierarchical_values = hierarchize(nodal_values)
-    print("Previously:", len(hierarchical_values.subspaces))
-    compressed_values = compress(
-        hierarchical_values, epsilon=args.epsilon, only_whole_subspaces=True
-    )
-    print("After compression:", len(compressed_values.subspaces))
+
+    def report(label: str, tensors) -> None:
+        num_bytes = sum(s.num_bytes for s in tensors.subspaces.values())
+        nnz = sum(s.data.nnz for s in tensors.subspaces.values() if s.data is not None)
+        print(
+            f"{label}: {len(tensors.subspaces)} subspaces, "
+            f"{nnz} nonzero coefficients, {num_bytes / 2**20:.2f} MiB"
+        )
+
+    report("Previously", hierarchical_values)
+    # partial compression: surviving coefficients per subspace are kept and
+    # stored sparsely where that pays off
+    compressed_values = compress(hierarchical_values, epsilon=args.epsilon)
+    report("After compression", compressed_values)
 
     # re-interpolate onto OpenVDB grid
     spght_openvdb_grid = spght_to_vdb_grid(
@@ -89,6 +98,8 @@ if __name__ == "__main__":
     )
     spght_openvdb_grid.transform = grid.transform  # preserve original transform
     spght_openvdb_grid.prune(tolerance=0.0)  # collapse uniform regions to save memory
-    vdb.write(f"spght_{args.epsilon}_{basename(args.input_file)}", grids=[spght_openvdb_grid])
+    vdb.write(
+        f"spght_{args.epsilon}_{basename(args.input_file)}", grids=[spght_openvdb_grid]
+    )
 
     # optional: invoke blender to render the compressed cloud
