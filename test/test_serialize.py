@@ -399,3 +399,13 @@ def test_read_rejects_duplicate_table_entries():
     _struct.pack_into("<I", corrupted, crc_offset, _zlib.crc32(corrupted[:crc_offset]))
     with pytest.raises(ValueError, match="[Dd]uplicate"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_container_equality_roundtrip():
+    x, y = np.meshgrid(np.linspace(0, 1, 32), np.linspace(0, 1, 32), indexing="ij")
+    nodal_values = np.exp(-((x - 0.3) ** 2 + (y - 0.6) ** 2) / 0.002)
+    tensors = compress(hierarchize(nodal_values), epsilon=1e-3)
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    assert SparseGridHierarchicalTensors.read(buffer) == tensors

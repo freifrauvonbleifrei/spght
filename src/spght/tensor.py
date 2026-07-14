@@ -176,6 +176,22 @@ class Tensor(abc.ABC):
             )
         self._set_linear(linear, values)
 
+    def __eq__(self, other: object) -> bool:
+        """Semantic equality: same logical array, order, and dtype --
+        regardless of the storage kind (a dense and a sparse tensor holding
+        the same values compare equal). Tensors are mutable and therefore
+        unhashable."""
+        if not isinstance(other, Tensor):
+            return NotImplemented
+        return (
+            tuple(self.shape) == tuple(other.shape)
+            and self.order == other.order
+            and self.dtype == other.dtype
+            and bool(np.array_equal(self.to_dense(), other.to_dense()))
+        )
+
+    __hash__ = None  # type: ignore[assignment]
+
     def __array__(self) -> npt.NDArray:
         return self.to_dense()
 
