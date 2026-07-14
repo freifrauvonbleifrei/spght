@@ -101,15 +101,19 @@ class SparseGridHierarchicalTensors:
                 f"min_level {self.min_level} exceeds max_level {self.max_level}"
             )
         for k, v in self.subspaces.items():
-            if len(k) != self.dimensions:
-                raise ValueError("subspace key dimensionality does not match container")
-            if any(level < minimum for level, minimum in zip(k, self.min_level)):
-                raise ValueError(f"subspace level {k} is below min_level")
-            if len(v.extents) != self.dimensions:
-                raise ValueError(
-                    "subspace extents dimensionality does not match container"
-                )
+            self._validate_subspace(k, v)
         self._sort_subspaces()
+
+    def _validate_subspace(self, level: tuple[int, ...], subspace: Subspace) -> None:
+        if len(level) != self.dimensions:
+            raise ValueError("subspace key dimensionality does not match container")
+        if any(
+            single_level < minimum
+            for single_level, minimum in zip(level, self.min_level)
+        ):
+            raise ValueError(f"subspace level {level} is below min_level")
+        if len(subspace.extents) != self.dimensions:
+            raise ValueError("subspace extents dimensionality does not match container")
 
     def scaling_dimensions(self, level: Sequence[int]) -> tuple[bool, ...]:
         """Along which dimensions a subspace at `level` holds scaling
@@ -127,15 +131,7 @@ class SparseGridHierarchicalTensors:
         )
 
     def add_subspace(self, level: tuple[int, ...], subspace: Subspace) -> None:
-        if len(level) != self.dimensions:
-            raise ValueError("subspace dimensionality does not match container")
-        if len(self.max_level) != self.dimensions:
-            raise ValueError("max_level dimensionality does not match container")
-        if any(
-            single_level < minimum
-            for single_level, minimum in zip(level, self.min_level)
-        ):
-            raise ValueError(f"subspace level {level} is below min_level")
+        self._validate_subspace(level, subspace)
         self.subspaces[level] = subspace
         self._sort_subspaces()
 
