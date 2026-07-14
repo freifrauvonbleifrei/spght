@@ -2,16 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 import numpy as np
+import pytest
 
 from spght.compress import compress
+from spght.data_structures import SparseGridHierarchicalTensors, Subspace
 from spght.interpolate import (
     interpolate,
     _reconstruct_subspace_and_evaluate,
     interpolate_subspace,
 )
-from spght.hierarchize import hierarchize
+from spght.hierarchize import hierarchize, dehierarchize
 from spght.linearize import extent_from_level, midpoint_coordinates_from_level
+from spght.tensor import DenseTensor
+from spght.wavelets import cdf_2_2_basis, hat_basis, half_haar, cubic_basis
 
 
 def test_interpolate_random_level0():
@@ -158,9 +163,6 @@ def test_interpolate_fine_scale_random():
 
 
 def test_interpolate_ignores_reserved_quantization_fields():
-    from spght.data_structures import SparseGridHierarchicalTensors, Subspace
-    from spght.tensor import DenseTensor
-
     # the quantization fields are reserved: interpolation returns the stored
     # coefficient unchanged
     tensors = SparseGridHierarchicalTensors(
@@ -200,7 +202,9 @@ def test_fast_path_matches_reconstruction():
         tensors = compress(
             hierarchize(rng.random(shape), min_level=min_level), epsilon=0.05
         )
-        coordinates = rng.random((32, len(shape))) * 0.999
+        coordinates = rng.random((32, len(shape)))
+        coordinates[0] = 1.0
+        coordinates[1] = 0.0
         for level, subspace in tensors.subspaces.items():
             scaling = tensors.scaling_dimensions(level)
             fast = interpolate_subspace(scaling, coordinates, subspace)
@@ -208,3 +212,90 @@ def test_fast_path_matches_reconstruction():
                 scaling, coordinates, subspace
             )
             assert np.array_equal(fast, reference), (shape, level)
+
+
+def test_interpolate_defaults_to_recorded_bases():
+    x = np.linspace(0.0, 1.0, 17)
+    values = np.sin(2.0 * np.pi * x) + 2.0
+    coordinates = np.linspace(0.0, 1.0, 41).reshape(-1, 1)
+    for basis in [hat_basis(), cdf_2_2_basis()]:
+        tensors = hierarchize(values, wavelet=basis)
+        # hat/CDF(2,2) contributions are piecewise linear, so the exact
+        # reconstruction is the linear interpolant of the nodal values
+        expected = np.interp(coordinates[:, 0], x, dehierarchize(tensors))
+        result = interpolate(coordinates, tensors)  # no wavelet argument
+        assert np.allclose(result, expected, atol=1e-12), basis.scheme.name
+
+
+def test_interpolate_recorded_bases_2d_at_nodes():
+    rng = np.random.default_rng(20)
+    nodal_values = rng.normal(size=(9, 17))
+    tensors = hierarchize(nodal_values, wavelet=hat_basis())
+    node_x = np.linspace(0.0, 1.0, 9)
+    node_y = np.linspace(0.0, 1.0, 17)
+    coordinates = np.stack(np.meshgrid(node_x, node_y, indexing="ij"), axis=-1).reshape(
+        -1, 2
+    )
+    values = np.asarray(interpolate(coordinates, tensors)).reshape(9, 17)
+    assert np.allclose(values, nodal_values, atol=1e-11)
+
+
+def test_interpolate_default_matches_explicit_haar():
+    rng = np.random.default_rng(21)
+    tensors = hierarchize(rng.random((8, 8)))
+    coordinates = rng.random((32, 2))
+    explicit = np.zeros(coordinates.shape[0])
+    for level, subspace in tensors.subspaces.items():
+        explicit += interpolate_subspace(
+            tensors.scaling_dimensions(level), coordinates, subspace, wavelet=half_haar
+        )
+    assert np.array_equal(interpolate(coordinates, tensors), explicit)
+
+
+def test_interpolate_cubic_raises_not_implemented():
+    x = np.linspace(0.0, 1.0, 17)
+    tensors = hierarchize(x * x, wavelet=cubic_basis())
+    with pytest.raises(NotImplementedError, match="direct evaluation"):
+        interpolate(np.array([[0.3]]), tensors)
+
+
+def test_interpolate_at_upper_boundary():
+    # coordinate 1.0 is explicitly allowed by the validation and belongs
+    # to the last cell; anything beyond the domain still raises
+
+    nodal_values = np.arange(8.0)
+    tensors = hierarchize(nodal_values)
+    assert np.isclose(interpolate(np.array([1.0]), tensors), nodal_values[-1])
+    with pytest.raises(ValueError, match="unit hypercube"):
+        interpolate(np.array([1.5]), tensors)
+    # the exact-1.0 remap must not swallow overshoots on the direct
+    # subspace path either (which skips the drivers' domain validation)
+    level, subspace = next(iter(tensors.subspaces.items()))
+    with pytest.raises(IndexError):
+        interpolate_subspace(
+            tensors.scaling_dimensions(level), np.array([[1.0 + 1e-9]]), subspace
+        )
+
+    nodal_2d = np.arange(16.0).reshape(4, 4)
+    tensors_2d = hierarchize(nodal_2d)
+    corners = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    values = interpolate(corners, tensors_2d)
+    assert np.allclose(
+        values, [nodal_2d[0, 0], nodal_2d[-1, 0], nodal_2d[0, -1], nodal_2d[-1, -1]]
+    )
+
+
+def test_interpolate_and_compress_handle_empty_subspaces():
+    tensors = hierarchize(np.random.default_rng(22).random((4, 4)))
+    emptied_level = (2, 2)
+    tensors.subspaces[emptied_level] = replace(
+        tensors.subspaces[emptied_level], data=None
+    )
+
+    # EMPTY subspaces contribute zero, matching dehierarchize's zero blocks
+    midpoints = midpoint_coordinates_from_level(tensors.max_level)
+    assert np.allclose(interpolate(midpoints, tensors), dehierarchize(tensors))
+
+    # and compress treats them as all-zero (dropped here, since not lmin)
+    compressed = compress(tensors, only_whole_subspaces=True)
+    assert emptied_level not in compressed.subspaces
