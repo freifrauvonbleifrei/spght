@@ -27,8 +27,10 @@ def compress(
         subspaces=dict(),
     )
     for level, subspace in hierarchical_tensors.subspaces.items():
-        assert subspace.data is not None
-        coefficients = subspace.data.linear_values
+        if subspace.data is None:  # EMPTY: implicitly all-zero
+            coefficients = np.zeros(0)
+        else:
+            coefficients = subspace.data.linear_values
         keep = np.abs(coefficients) > epsilon
         if level == hierarchical_tensors.min_level:
             # always keep the all-scaling lmin subspace
@@ -39,6 +41,7 @@ def compress(
             compressed_tensors.add_subspace(level, deepcopy(subspace))
         else:
             # partial compression: keep only the surviving coefficients
+            assert subspace.data is not None
             keys = subspace.data.linear_indices[keep]
             compressed_data = make_tensor_from_linear(
                 keys,
