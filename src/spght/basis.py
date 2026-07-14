@@ -70,6 +70,10 @@ class Periodic(BoundaryRule):
 
     def ghost_slab(self, arr, position, wall, axis):
         period = arr.shape[axis] - 1 if wall == "node" else arr.shape[axis]
+        if period <= 0:
+            raise ValueError(
+                "Periodic ghosts need at least two stored dofs on a 'node' wall"
+            )
         return _take(arr, position % period, axis)
 
 
