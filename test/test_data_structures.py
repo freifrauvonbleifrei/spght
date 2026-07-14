@@ -326,3 +326,18 @@ def test_min_level_and_scaling_dimensions():
                 )
             },
         )
+
+
+def test_sparse_from_linear_validates_keys():
+    values = np.array([1.0, 2.0])
+    # out-of-range keys would otherwise silently wrap in the narrowing
+    # index cast at serialization time
+    with pytest.raises(ValueError, match="within"):
+        SparseTensor.from_linear(np.array([0, 300]), values, shape=(16, 16))
+    with pytest.raises(ValueError, match="within"):
+        SparseTensor.from_linear(np.array([-1, 3]), values, shape=(16, 16))
+    with pytest.raises(ValueError, match="unique"):
+        SparseTensor.from_linear(np.array([5, 5]), values, shape=(16, 16))
+    # valid keys still work, unsorted input included
+    tensor = SparseTensor.from_linear(np.array([7, 3]), values, shape=(16, 16))
+    assert tensor.nnz == 2 and tensor[3] == 2.0

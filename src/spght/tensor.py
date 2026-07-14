@@ -316,9 +316,18 @@ class SparseTensor(Tensor):
         self._pending: dict[int, float] = {}
 
         keys = keys.astype(np.int64)
+        total = int(np.prod(shape)) if shape else 1
+        if keys.size and (keys.min() < 0 or keys.max() >= total):
+            # invalid keys would otherwise surface only much later (or, on
+            # serialization, silently wrap in the narrowing index cast)
+            raise ValueError(
+                f"Linear keys must be within [0, {total}) for shape {shape}"
+            )
         sort_order = np.argsort(keys)
         self._keys = keys[sort_order]
         self._values = values[sort_order]
+        if np.any(self._keys[1:] == self._keys[:-1]):
+            raise ValueError("Linear keys must be unique")
 
     @property
     def nnz(self) -> int:
