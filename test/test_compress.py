@@ -171,3 +171,11 @@ def test_compress_with_min_level():
     assert np.max(np.abs(reconstructed - nodal_values)) <= np.max(
         np.abs(reconstructed_no_min_level - nodal_values)
     )
+
+
+def test_compress_shares_unchanged_subspaces():
+    hierarchical = hierarchize(np.random.default_rng(23).random((4, 4)))
+    compressed = compress(hierarchical, only_whole_subspaces=True)
+    # kept-unchanged subspaces are shared, not copied
+    for level, subspace in compressed.subspaces.items():
+        assert subspace is hierarchical.subspaces[level]

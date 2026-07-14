@@ -74,6 +74,7 @@ Subspace record:
         EMPTY              nothing
 """
 
+import math
 import struct
 import zlib
 from pathlib import Path
@@ -370,39 +371,62 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         num_blob_bytes,
         checksum,
     ) = _RECORD.unpack(_read_exactly(stream, _RECORD.size))
-    blob = _read_exactly(stream, num_blob_bytes)
+
+    # validate every field the blob size derives from BEFORE reading the
+    # blob, so a corrupted size field cannot drive a huge allocation, and
+    # so all rejections surface as ValueError (the documented contract)
+    order = _CODE_TO_ORDER.get(order_code)
+    if order is None:
+        raise ValueError(f"Unknown linearization order code {order_code}")
+    kind = TensorKind(kind_code)  # raises ValueError for unknown codes
+    if compression != 0:
+        raise ValueError(f"Reserved compression byte must be 0, got {compression}")
+    shape = tuple(int(e) for e in extents)
+    total = math.prod(shape) if shape else 1  # Python ints: no int64 overflow
+    try:
+        value_dtype = np.dtype(f"{dtype_kind.decode('ascii')}{itemsize}")
+    except (TypeError, UnicodeDecodeError) as error:
+        raise ValueError(
+            f"Invalid value dtype {dtype_kind!r} with itemsize {itemsize}"
+        ) from error
+
+    if kind == TensorKind.EMPTY:
+        if num_stored != 0:
+            raise ValueError("Empty subspace record must store zero entries")
+        expected_blob_bytes = 0
+    elif kind == TensorKind.FULL:
+        if num_stored != total:
+            raise ValueError("Full subspace record must store every entry")
+        expected_blob_bytes = total * itemsize
+    else:  # TensorKind.LINEAR
+        if num_stored > total:
+            raise ValueError("Sparse subspace stores more entries than it has")
+        index_dtype = _index_dtype(total)
+        expected_blob_bytes = num_stored * (index_dtype.itemsize + itemsize)
+    if num_blob_bytes != expected_blob_bytes:
+        raise ValueError("Subspace data block has inconsistent size")
+
+    blob = _read_exactly(stream, expected_blob_bytes)
     if zlib.crc32(blob) != checksum:
         raise ValueError("Subspace data block failed its checksum")
-
-    order = _CODE_TO_ORDER[order_code]
-    kind = TensorKind(kind_code)
-    shape = tuple(int(e) for e in extents)
-    total = int(np.prod(shape)) if shape else 1
-    value_dtype = np.dtype(f"{dtype_kind.decode('ascii')}{itemsize}")
 
     data: Tensor | None
     if kind == TensorKind.EMPTY:
         data = None
     elif kind == TensorKind.FULL:
-        if num_stored != total or num_blob_bytes != total * itemsize:
-            raise ValueError("Full subspace data block has inconsistent size")
         # astype() also yields a writable copy of the read-only buffer view
         flat = np.frombuffer(blob, dtype=value_dtype.newbyteorder("<")).astype(
             value_dtype
         )
         data = DenseTensor(flat, shape, order=order)
-    elif kind == TensorKind.LINEAR:
-        index_dtype = _index_dtype(total)
+    else:  # TensorKind.LINEAR
         split = num_stored * index_dtype.itemsize
-        if num_blob_bytes != split + num_stored * itemsize:
-            raise ValueError("Sparse subspace data block has inconsistent size")
         keys = np.frombuffer(blob[:split], dtype=index_dtype).astype(np.int64)
         values = np.frombuffer(
             blob[split:], dtype=value_dtype.newbyteorder("<")
         ).astype(value_dtype)
+        # SparseTensor validates key range and uniqueness
         data = SparseTensor.from_linear(keys, values, shape, order=order)
-    else:
-        raise ValueError(f"Cannot deserialize tensor kind {kind!r}")
 
     return Subspace(
         extents=shape,
@@ -508,6 +532,8 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
         for level, offset in table:
             stream.seek(offset)
             subspaces[level] = _decode_record(stream, num_dims)
+        if len(subspaces) != num_subspaces:
+            raise ValueError("Duplicate subspace levels in the table")
     finally:
         if should_close:
             stream.close()

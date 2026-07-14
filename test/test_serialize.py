@@ -2,10 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import io
 
+from dataclasses import replace
+import io
 import numpy as np
 import pytest
+import struct as _struct
+import zlib as _zlib
 
 from spght.basis import Dirichlet, Neumann
 from spght.compress import compress
@@ -16,9 +19,10 @@ from spght.data_structures import (
     subspace_order_key,
 )
 from spght.hierarchize import hierarchize, dehierarchize
+from spght.lifting import Basis1D
 from spght.serialize import _index_dtype
 from spght.tensor import DenseTensor, SparseTensor
-from spght.wavelets import cdf_2_2_basis, cubic_basis, hat_basis
+from spght.wavelets import haar_basis, cdf_2_2_basis, cubic_basis, hat_basis
 
 
 def _assert_equal_containers(
@@ -320,11 +324,6 @@ def test_periodic_basis_roundtrip():
 
 
 def test_scheme_name_limited_to_15_characters():
-    from dataclasses import replace
-
-    from spght.lifting import Basis1D
-    from spght.wavelets import haar_basis
-
     basis = haar_basis()
     too_long = Basis1D(
         basis.centering,
@@ -347,3 +346,66 @@ def test_scheme_name_limited_to_15_characters():
     tensors.write(buffer)
     buffer.seek(0)
     assert SparseGridHierarchicalTensors.read(buffer).bases[0].scheme.name == "a" * 15
+
+
+def _first_record_offset(raw: bytes) -> tuple[int, int]:
+    (num_dims,) = _struct.unpack_from("<H", raw, 35)
+    (num_subspaces,) = _struct.unpack_from("<Q", raw, 37)
+    (basis_length,) = _struct.unpack_from("<I", raw, 45 + 2 * num_dims)
+    return (
+        45 + 2 * num_dims + 4 + basis_length + num_subspaces * (num_dims + 8) + 4
+    ), num_dims
+
+
+def test_read_rejects_unknown_order_code():
+    corrupted = _valid_file_bytes()
+    record, num_dims = _first_record_offset(corrupted)
+    corrupted[record + 8 * num_dims] = 9  # order code, outside the record CRC
+    with pytest.raises(ValueError, match="order code"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_read_rejects_reserved_compression_byte():
+    corrupted = _valid_file_bytes()
+    record, num_dims = _first_record_offset(corrupted)
+    # after order, kind, dtype char, itemsize, precision (2), padding (2)
+    corrupted[record + 8 * num_dims + 8] = 5
+    with pytest.raises(ValueError, match="compression"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_read_rejects_invalid_dtype():
+    corrupted = _valid_file_bytes()
+    record, num_dims = _first_record_offset(corrupted)
+    corrupted[record + 8 * num_dims + 2] = ord("x")  # dtype kind char
+    with pytest.raises(ValueError, match="dtype"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_read_rejects_duplicate_table_entries():
+
+    corrupted = _valid_file_bytes()
+    (num_dims,) = _struct.unpack_from("<H", corrupted, 35)
+    (num_subspaces,) = _struct.unpack_from("<Q", corrupted, 37)
+    assert num_subspaces >= 2
+    (basis_length,) = _struct.unpack_from("<I", corrupted, 45 + 2 * num_dims)
+    table = 45 + 2 * num_dims + 4 + basis_length
+    entry_size = num_dims + 8
+    # copy the first table entry over the second, then re-seal the header CRC
+    corrupted[table + entry_size : table + 2 * entry_size] = corrupted[
+        table : table + entry_size
+    ]
+    crc_offset = table + num_subspaces * entry_size
+    _struct.pack_into("<I", corrupted, crc_offset, _zlib.crc32(corrupted[:crc_offset]))
+    with pytest.raises(ValueError, match="[Dd]uplicate"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_container_equality_roundtrip():
+    x, y = np.meshgrid(np.linspace(0, 1, 32), np.linspace(0, 1, 32), indexing="ij")
+    nodal_values = np.exp(-((x - 0.3) ** 2 + (y - 0.6) ** 2) / 0.002)
+    tensors = compress(hierarchize(nodal_values), epsilon=1e-3)
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    assert SparseGridHierarchicalTensors.read(buffer) == tensors

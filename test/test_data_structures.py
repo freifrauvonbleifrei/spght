@@ -326,3 +326,49 @@ def test_min_level_and_scaling_dimensions():
                 )
             },
         )
+
+
+def test_sparse_from_linear_validates_keys():
+    values = np.array([1.0, 2.0])
+    # out-of-range keys would otherwise silently wrap in the narrowing
+    # index cast at serialization time
+    with pytest.raises(ValueError, match="within"):
+        SparseTensor.from_linear(np.array([0, 300]), values, shape=(16, 16))
+    with pytest.raises(ValueError, match="within"):
+        SparseTensor.from_linear(np.array([-1, 3]), values, shape=(16, 16))
+    with pytest.raises(ValueError, match="unique"):
+        SparseTensor.from_linear(np.array([5, 5]), values, shape=(16, 16))
+    # valid keys still work, unsorted input included
+    tensor = SparseTensor.from_linear(np.array([7, 3]), values, shape=(16, 16))
+    assert tensor.nnz == 2 and tensor[3] == 2.0
+
+
+def test_tensor_semantic_equality():
+    array = np.zeros((4, 4))
+    array[1, 2] = 3.0
+    dense = DenseTensor.from_dense(array)
+    sparse = SparseTensor.from_dense(array)
+    # equality is semantic: storage kind does not matter
+    assert dense == sparse
+    assert sparse == DenseTensor.from_dense(array)
+    assert dense != DenseTensor.from_dense(array, order="F")  # order differs
+    assert dense != DenseTensor.from_dense(array.astype(np.float32))
+    other = array.copy()
+    other[0, 0] = 1.0
+    assert dense != DenseTensor.from_dense(other)
+    # mutable -> unhashable
+    with pytest.raises(TypeError):
+        hash(dense)
+
+
+def test_add_subspace_validates_like_the_constructor():
+    tensors = SparseGridHierarchicalTensors(dimensions=2, max_level=(1, 1))
+    with pytest.raises(ValueError, match="extents dimensionality"):
+        tensors.add_subspace(
+            (1, 1),
+            Subspace(
+                extents=(1,),  # wrong dimensionality
+                precision_bits=64,
+                data=DenseTensor.from_dense(np.ones(1)),
+            ),
+        )

@@ -34,7 +34,7 @@ def hierarchize(
     container, so reconstruction does not need it passed again."""
     num_dim = nodal_values.ndim
     minimum_levels = per_dimension(min_level, int, num_dim, "min_level")
-    level: npt.NDArray = np.ndarray(num_dim, dtype=int)
+    level: npt.NDArray = np.empty(num_dim, dtype=int)
 
     if wavelet is None:
         wavelet = haar_basis()
@@ -44,15 +44,18 @@ def hierarchize(
         lowest = bases[d].centering.lowest_min_level
         if not lowest <= minimum_levels[d] <= level[d]:
             raise ValueError(
-                f"min_level {minimum_levels} must be between {lowest} and "
-                f"the maximum level {tuple(level[: d + 1])} in every dimension"
+                f"min_level[{d}] = {minimum_levels[d]} must be between "
+                f"{lowest} and the maximum level {int(level[d])} of "
+                f"dimension {d}"
             )
 
     modified_values = [nodal_values]
     for d in range(num_dim):
         updated_values = []
         for slices in modified_values:
-            updated_values.extend(decompose_axis(slices, d, bases[d], minimum_levels[d]))
+            updated_values.extend(
+                decompose_axis(slices, d, bases[d], minimum_levels[d])
+            )
         modified_values = updated_values
 
     # construct a matching list of subspace levels: tensor product of 1D levels

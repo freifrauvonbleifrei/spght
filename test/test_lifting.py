@@ -69,7 +69,7 @@ def test_roundtrip_all_schemes_and_boundaries_1d(basis, extent, min_level_offset
     nodal_values = RNG.normal(size=extent)
     min_level = basis.centering.lowest_min_level + min_level_offset
     hierarchical = hierarchize(nodal_values, wavelet=basis, min_level=min_level)
-    back = dehierarchize(hierarchical, wavelet=basis)
+    back = dehierarchize(hierarchical)
     assert np.allclose(back, nodal_values, atol=1e-12)
 
 
@@ -129,7 +129,7 @@ def test_interior_only_hat_with_dirichlet_data(g_left, g_right):
     for level, subspace in hierarchical.subspaces.items():
         if level[0] > 1:
             assert np.allclose(subspace.data.to_dense(), 0.0, atol=1e-13)
-    assert np.allclose(dehierarchize(hierarchical, wavelet=basis), values[1:-1])
+    assert np.allclose(dehierarchize(hierarchical), values[1:-1])
 
 
 def test_interior_only_grid_requires_min_level_one():
@@ -212,7 +212,7 @@ def test_anisotropic_mixed_roundtrip_3d(shape, bases, min_level):
                 else basis.centering.num_details(level[d])
             )
             assert subspace.extents[d] == expected
-    back = dehierarchize(hierarchical, wavelet=bases)
+    back = dehierarchize(hierarchical)
     assert np.allclose(back, nodal_values, atol=1e-14)
 
 
@@ -227,7 +227,7 @@ def test_dehierarchize_with_dropped_subspaces():
     # dropping the finest subspaces shrinks max_level; compare via interpolation at the
     # original nodes instead
     coords = np.stack(np.meshgrid(x, x, indexing="ij"), axis=-1).reshape(-1, 2)
-    values = interpolate(coords, compressed, wavelet=basis)
+    values = interpolate(coords, compressed)
     assert np.max(np.abs(values - nodal_values.ravel())) <= epsilon * len(
         hierarchical.subspaces
     )
@@ -238,14 +238,12 @@ def test_linear_bases_reproduce_nodal_values(basis):
     x = np.linspace(0, 1, 17)
     values = np.sin(2 * np.pi * x) + x
     hierarchical = hierarchize(values, wavelet=basis)
-    at_nodes = [interpolate(np.array([c]), hierarchical, wavelet=basis) for c in x]
+    at_nodes = [interpolate(np.array([c]), hierarchical) for c in x]
     assert np.allclose(at_nodes, values, atol=1e-12)
     # between nodes, the hat basis interpolates linearly
     between = RNG.uniform(0, 1, size=8)
     expected = np.interp(between, x, values)
-    at_between = [
-        interpolate(np.array([c]), hierarchical, wavelet=basis) for c in between
-    ]
+    at_between = [interpolate(np.array([c]), hierarchical) for c in between]
     assert np.allclose(at_between, expected, atol=1e-12)
 
 
@@ -257,7 +255,7 @@ def test_interpolate_matches_dehierarchize_2d_mixed():
     x_mid = (np.arange(8) + 0.5) / 8
     y_nodes = np.arange(17) / 16
     coords = np.array([(x, y) for x in x_mid for y in y_nodes])
-    values = interpolate(coords, hierarchical, wavelet=bases)
+    values = interpolate(coords, hierarchical)
     assert np.allclose(values, nodal_values.ravel(), atol=1e-11)
 
 
@@ -270,9 +268,7 @@ def test_interpolate_interior_only_uses_boundary_values(g_left, g_right):
     values = g_left + (g_right - g_left) * x
     hierarchical = hierarchize(values[1:-1], wavelet=basis, min_level=1)
     coords = RNG.uniform(0, 1, size=8)
-    interpolated = [
-        interpolate(np.array([c]), hierarchical, wavelet=basis) for c in coords
-    ]
+    interpolated = [interpolate(np.array([c]), hierarchical) for c in coords]
     assert np.allclose(interpolated, g_left + (g_right - g_left) * coords, atol=1e-12)
 
 
@@ -283,8 +279,8 @@ def test_interpolate_after_compression_sparse_subspaces():
     compressed = compress(hierarchical, epsilon=1e-12)
     coords = RNG.uniform(0, 1, size=(8, 2))
     assert np.allclose(
-        interpolate(coords, compressed, wavelet=basis),
-        interpolate(coords, hierarchical, wavelet=basis),
+        interpolate(coords, compressed),
+        interpolate(coords, hierarchical),
         atol=1e-11,
     )
 
@@ -294,7 +290,7 @@ def test_cubic_interpolation_not_supported():
     basis = cubic_basis()
     hierarchical = hierarchize(values, wavelet=basis)
     with pytest.raises(NotImplementedError, match="evaluation"):
-        interpolate(np.array([0.3]), hierarchical, wavelet=basis)
+        interpolate(np.array([0.3]), hierarchical)
 
 
 def test_per_dimension_rejects_mismatched_sequences():
@@ -371,16 +367,26 @@ def test_periodic_vertex_2d_roundtrip_and_interpolation():
     values = RNG.normal(size=(17, 32))
     bases = (hat_basis(), cdf_2_2_basis(periodic=True))
     hierarchical = hierarchize(values, wavelet=bases)
-    assert np.allclose(dehierarchize(hierarchical, wavelet=bases), values, atol=1e-11)
+    assert np.allclose(dehierarchize(hierarchical), values, atol=1e-11)
     x_nodes = np.arange(17) / 16
     y_nodes = np.arange(32) / 32
     coords = np.array([(x, y) for x in x_nodes for y in y_nodes])
-    interpolated = interpolate(coords, hierarchical, wavelet=bases)
+    interpolated = interpolate(coords, hierarchical)
     assert np.allclose(interpolated, values.ravel(), atol=1e-11)
     # evaluation past the last stored node wraps to the seam node
     wrap_coords = np.array([(x, 1.0) for x in x_nodes])
     assert np.allclose(
-        interpolate(wrap_coords, hierarchical, wavelet=bases),
+        interpolate(wrap_coords, hierarchical),
         values[:, 0],
         atol=1e-11,
     )
+
+
+def test_periodic_ghosts_reject_degenerate_node_wall():
+    with pytest.raises(ValueError, match="at least two"):
+        Periodic().ghost_slab(np.ones(1), -1, "node", axis=0)
+
+
+def test_hierarchize_min_level_error_names_the_dimension():
+    with pytest.raises(ValueError, match=r"min_level\[1\] = 9"):
+        hierarchize(RNG.normal(size=(4, 4)), wavelet=haar_basis(), min_level=(0, 9))

@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from copy import deepcopy
 from dataclasses import replace
 import numpy as np
 
@@ -18,7 +17,11 @@ def compress(
     epsilon: float = 0.0,
     density_threshold: float = 0.5,
 ) -> SparseGridHierarchicalTensors:
-    """Drop hierarchical coefficients with |coefficient| <= epsilon."""
+    """Drop hierarchical coefficients with |coefficient| <= epsilon.
+
+    Subspaces that are kept unchanged are shared with the input container
+    (not copied); mutating their coefficient data afterwards affects both
+    containers."""
     compressed_tensors = SparseGridHierarchicalTensors(
         dimensions=hierarchical_tensors.dimensions,
         max_level=hierarchical_tensors.max_level,
@@ -27,18 +30,22 @@ def compress(
         subspaces=dict(),
     )
     for level, subspace in hierarchical_tensors.subspaces.items():
-        assert subspace.data is not None
-        coefficients = subspace.data.linear_values
+        if subspace.data is None:  # EMPTY: implicitly all-zero
+            coefficients = np.zeros(0)
+        else:
+            coefficients = subspace.data.linear_values
         keep = np.abs(coefficients) > epsilon
         if level == hierarchical_tensors.min_level:
             # always keep the all-scaling lmin subspace
-            compressed_tensors.add_subspace(level, deepcopy(subspace))
+            compressed_tensors.add_subspace(level, subspace)
         elif not keep.any():
             continue
         elif keep.all() or only_whole_subspaces:
-            compressed_tensors.add_subspace(level, deepcopy(subspace))
+            # kept unchanged: shared with the input container, not copied
+            compressed_tensors.add_subspace(level, subspace)
         else:
             # partial compression: keep only the surviving coefficients
+            assert subspace.data is not None
             keys = subspace.data.linear_indices[keep]
             compressed_data = make_tensor_from_linear(
                 keys,
