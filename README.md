@@ -47,8 +47,9 @@ The whole pipeline is reachable from the top-level namespace:
 import numpy as np
 import spght
 
-# a function sampled on a structured grid; extents should be powers of two
-# (or use hierarchize(..., deviate_from_power_of_two=...) for e.g. 2**l + 1)
+# a function sampled on a structured grid; the extents must match the
+# basis' centering: 2**l cells (default Haar / periodic vertex grids),
+# 2**l + 1 vertices (e.g. spght.hat_basis()), or 2**l - 1 interior vertices
 nodal_values = np.random.default_rng(0).random((64, 64, 64))
 
 # decompose into hierarchical subspaces, one coefficient block per level vector
