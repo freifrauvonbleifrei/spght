@@ -348,7 +348,7 @@ def test_scheme_name_limited_to_15_characters():
     assert SparseGridHierarchicalTensors.read(buffer).bases[0].scheme.name == "a" * 15
 
 
-def _first_record_offset(raw: bytes) -> int:
+def _first_record_offset(raw: bytes) -> tuple[int, int]:
     (num_dims,) = _struct.unpack_from("<H", raw, 35)
     (num_subspaces,) = _struct.unpack_from("<Q", raw, 37)
     (basis_length,) = _struct.unpack_from("<I", raw, 45 + 2 * num_dims)
