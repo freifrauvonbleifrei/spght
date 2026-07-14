@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import pywt
-
 from spght.basis import (
     BoundaryRule,
     CellCentered,
@@ -39,12 +37,11 @@ def _vertex_basis(
 
 # we want wavelets where we implicitly assume that higher level
 # means smaller intervals (nesting)
-# -> half normalization instead of 1/sqrt(2) normalization
-
-half_haar_filters = ([0.5, 0.5], [-0.5, 0.5], [1.0, 1.0], [1.0, -1.0])
-
-half_haar = pywt.Wavelet(name="half_haar", filter_bank=half_haar_filters)
-
+# -> half normalization instead of 1/sqrt(2) normalization.
+# The equivalent classical filter bank lives in spght.pywt_compat, which
+# bridges to the optional PyWavelets dependency; half_haar is None when
+# PyWavelets is not installed.
+from spght.pywt_compat import half_haar, half_haar_filters  # noqa: E402, F401
 
 # equivalent to half_haar:
 haar = LiftingScheme(

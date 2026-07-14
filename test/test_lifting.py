@@ -5,7 +5,6 @@
 import itertools
 import numpy as np
 import pytest
-import pywt
 
 from spght.basis import (
     CellCentered,
@@ -80,6 +79,7 @@ def test_roundtrip_all_schemes_and_boundaries_1d(basis, extent, min_level_offset
 )
 def test_haar_basis_matches_pywt_half_haar(shape, min_level):
     # the lifting Haar must stay equivalent to the pywt half_haar transform
+    pywt = pytest.importorskip("pywt")
 
     nodal_values = RNG.normal(size=shape)
     via_lifting = hierarchize(nodal_values, wavelet=haar_basis(), min_level=min_level)

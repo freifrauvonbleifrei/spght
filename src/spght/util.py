@@ -4,9 +4,34 @@
 
 """Small helpers shared across spght modules."""
 
-from typing import Sequence, TypeVar, Union
+from functools import wraps
+from importlib.util import find_spec
+from typing import Callable, Sequence, TypeVar, Union
 
 T = TypeVar("T")
+
+
+def module_is_available(module_name: str) -> bool:
+    return find_spec(module_name) is not None
+
+
+def depends_on_optional(module_name: str) -> Callable:
+    """Mark a function as requiring an optional dependency: calling it
+    without the module installed raises a helpful ImportError instead of
+    failing at import time."""
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if not module_is_available(module_name):
+                raise ImportError(
+                    f"Optional dependency {module_name} not found ({func.__name__})."
+                )
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def per_dimension(

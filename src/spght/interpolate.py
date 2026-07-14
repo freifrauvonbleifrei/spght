@@ -4,15 +4,18 @@
 
 import numpy as np
 import numpy.typing as npt
-import pywt
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 
 from spght.basis import CellCentered
 from spght.data_structures import SparseGridHierarchicalTensors, Subspace
 from spght.lifting import Basis1D, BasisLike, as_bases, evaluate_block
 from spght.linearize import coordinates_to_multidim_indices
+from spght.pywt_compat import is_pywt_wavelet, reconstruct_block_haar_pywt
 from spght.wavelets import haar, half_haar
+
+if TYPE_CHECKING:
+    import pywt
 
 
 def _is_cell_haar(basis: Basis1D) -> bool:
@@ -50,33 +53,45 @@ def _evaluate_subspace_haar(
     return subspace.data[coefficient_indices] * signs
 
 
+def _synthesize_block_haar(
+    coefficients: npt.NDArray, scaling_dimensions: Sequence[bool]
+) -> npt.NDArray:
+    """One inverse Haar step per dimension, in plain numpy: a scaling
+    coefficient duplicates into both children ([c, c]), a detail
+    coefficient contributes with alternating sign ([c, -c]). Bit-identical
+    to the classical filter-bank reconstruction in
+    spght.pywt_compat.reconstruct_block_haar_pywt."""
+    for d, is_scaling in enumerate(scaling_dimensions):
+        # one inverse transform step along each dimension doubles its extent
+        coefficients = np.repeat(coefficients, 2, axis=d)
+        if not is_scaling:
+            odd_cells = [slice(None)] * coefficients.ndim
+            odd_cells[d] = slice(1, None, 2)
+            coefficients[tuple(odd_cells)] *= -1
+    return coefficients
+
+
 def _reconstruct_subspace_and_evaluate(
     scaling_dimensions: Sequence[bool],
     coordinates: npt.NDArray,
     subspace: Subspace,
-    wavelet: pywt.Wavelet = half_haar,
+    use_pywt: bool = False,
 ) -> npt.NDArray:
-    """Reference path: reconstruct the subspace's function on the
-    once-refined grid with the inverse wavelet transform, then evaluate by
-    cell lookup."""
+    """Reconstruct the subspace's function on the once-refined grid with
+    the inverse Haar transform, then evaluate by cell lookup. With
+    `use_pywt`, the equivalent classical filter-bank reconstruction is used
+    (requires the optional PyWavelets dependency)."""
     assert subspace.data is not None
     # the n-d view works for dense and sparse alike (dropped coefficients
     # read as zeros); the quantization fields are reserved and not yet applied
-    coeffs = subspace.data.to_dense()
-
-    for d, is_scaling in enumerate(scaling_dimensions):
-        # one inverse transform step along each dimension doubles its extent
-        if is_scaling:
-            coeffs = pywt.idwt(coeffs, None, wavelet, axis=d)
-        else:
-            coeffs = pywt.idwt(None, coeffs, wavelet, axis=d)
+    coeffs = subspace.data.to_dense().astype(np.float64)
+    if use_pywt:
+        coeffs = reconstruct_block_haar_pywt(coeffs, scaling_dimensions)
+    else:
+        coeffs = _synthesize_block_haar(coeffs, scaling_dimensions)
 
     # evaluate by piecewise-constant cell lookup;
     # only valid for the Haar scaling function
-    # phi, psi, x = pywt.Wavelet(wavelet).wavefun(level=1) + needs normalization for phi!
-    assert (
-        wavelet == half_haar
-    ), "Only Haar wavelet is currently supported for interpolation"
     multidim_indices = _cell_indices_clipped(coordinates, coeffs.shape)
     return coeffs[tuple(multidim_indices.T)]
 
@@ -85,35 +100,44 @@ def interpolate_subspace(
     scaling_dimensions: Sequence[bool],
     coordinates: npt.NDArray,
     subspace: Subspace,
-    wavelet: pywt.Wavelet | BasisLike = half_haar,
+    wavelet: "pywt.Wavelet | BasisLike | None" = None,
 ) -> npt.NDArray:
-    """Interpolate a single subspace's contribution at the given coordinates
-    using wavelet transform."""
+    """Interpolate a single subspace's contribution at the given coordinates.
+
+    `wavelet` is a Basis1D (or one per dimension); None means the
+    cell-centered Haar basis. A pywt.Wavelet may also be passed to
+    reconstruct with the classical filter-bank machinery instead (requires
+    the optional PyWavelets dependency; only the half_haar filter bank is
+    supported there)."""
     num_dims = len(subspace.extents)
     assert len(coordinates.shape) == 2 and coordinates.shape[1] == num_dims
     assert len(scaling_dimensions) == num_dims
     if subspace.data is None:
         # EMPTY subspace: every coefficient is implicitly zero
         return np.zeros(coordinates.shape[0])
-    if isinstance(wavelet, pywt.Wavelet):
-        is_haar = wavelet == half_haar
-    else:
-        bases = as_bases(wavelet, num_dims)
-        is_haar = all(_is_cell_haar(basis) for basis in bases)
-        if not is_haar:
+    if wavelet is not None and is_pywt_wavelet(wavelet):
+        if wavelet != half_haar:
+            raise NotImplementedError(
+                "Only the half_haar filter bank is supported for pywt-based "
+                "interpolation"
+            )
+        # explicit pywt input: demonstrate the classical reconstruction
+        return _reconstruct_subspace_and_evaluate(
+            scaling_dimensions, coordinates, subspace, use_pywt=True
+        )
+    if wavelet is not None:
+        bases = as_bases(wavelet, num_dims)  # type: ignore[arg-type]
+        if not all(_is_cell_haar(basis) for basis in bases):
             # lifting basis: reconstruct detail dimensions one level, then
             # evaluate with the basis' own stencils (constant / linear)
             return evaluate_block(
                 scaling_dimensions, coordinates, subspace.data.to_dense(), bases
             )
-        wavelet = half_haar  # bit-identical, and unlocks the fast paths
-    if is_haar and (
-        subspace.data.is_sparse or coordinates.shape[0] < subspace.data.size
-    ):
+    # cell-centered Haar: evaluate directly unless a large batch amortizes
+    # the full reconstruction
+    if subspace.data.is_sparse or coordinates.shape[0] < subspace.data.size:
         return _evaluate_subspace_haar(scaling_dimensions, coordinates, subspace)
-    return _reconstruct_subspace_and_evaluate(
-        scaling_dimensions, coordinates, subspace, wavelet
-    )
+    return _reconstruct_subspace_and_evaluate(scaling_dimensions, coordinates, subspace)
 
 
 def interpolate_single_coordinate(
