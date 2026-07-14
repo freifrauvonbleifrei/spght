@@ -243,9 +243,7 @@ def test_linear_bases_reproduce_nodal_values(basis):
     # between nodes, the hat basis interpolates linearly
     between = RNG.uniform(0, 1, size=8)
     expected = np.interp(between, x, values)
-    at_between = [
-        interpolate(np.array([c]), hierarchical) for c in between
-    ]
+    at_between = [interpolate(np.array([c]), hierarchical) for c in between]
     assert np.allclose(at_between, expected, atol=1e-12)
 
 
@@ -270,9 +268,7 @@ def test_interpolate_interior_only_uses_boundary_values(g_left, g_right):
     values = g_left + (g_right - g_left) * x
     hierarchical = hierarchize(values[1:-1], wavelet=basis, min_level=1)
     coords = RNG.uniform(0, 1, size=8)
-    interpolated = [
-        interpolate(np.array([c]), hierarchical) for c in coords
-    ]
+    interpolated = [interpolate(np.array([c]), hierarchical) for c in coords]
     assert np.allclose(interpolated, g_left + (g_right - g_left) * coords, atol=1e-12)
 
 
@@ -384,3 +380,13 @@ def test_periodic_vertex_2d_roundtrip_and_interpolation():
         values[:, 0],
         atol=1e-11,
     )
+
+
+def test_periodic_ghosts_reject_degenerate_node_wall():
+    with pytest.raises(ValueError, match="at least two"):
+        Periodic().ghost_slab(np.ones(1), -1, "node", axis=0)
+
+
+def test_hierarchize_min_level_error_names_the_dimension():
+    with pytest.raises(ValueError, match=r"min_level\[1\] = 9"):
+        hierarchize(RNG.normal(size=(4, 4)), wavelet=haar_basis(), min_level=(0, 9))
