@@ -10,7 +10,7 @@ from typing import Sequence
 
 from spght.basis import CellCentered
 from spght.data_structures import SparseGridHierarchicalTensors, Subspace
-from spght.lifting import Basis1D, as_bases, evaluate_block
+from spght.lifting import Basis1D, BasisLike, as_bases, evaluate_block
 from spght.linearize import coordinates_to_multidim_indices
 from spght.wavelets import haar, half_haar
 
@@ -54,7 +54,7 @@ def _reconstruct_subspace_and_evaluate(
     scaling_dimensions: Sequence[bool],
     coordinates: npt.NDArray,
     subspace: Subspace,
-    wavelet=half_haar,
+    wavelet: pywt.Wavelet = half_haar,
 ) -> npt.NDArray:
     """Reference path: reconstruct the subspace's function on the
     once-refined grid with the inverse wavelet transform, then evaluate by
@@ -85,7 +85,7 @@ def interpolate_subspace(
     scaling_dimensions: Sequence[bool],
     coordinates: npt.NDArray,
     subspace: Subspace,
-    wavelet=half_haar,
+    wavelet: pywt.Wavelet | BasisLike = half_haar,
 ) -> npt.NDArray:
     """Interpolate a single subspace's contribution at the given coordinates
     using wavelet transform."""
@@ -117,7 +117,7 @@ def interpolate_subspace(
 
 
 def interpolate_single_coordinate(
-    coordinate: Sequence[float],
+    coordinate: Sequence[float] | npt.NDArray,
     spghtensors: SparseGridHierarchicalTensors,
 ) -> float:
     """Interpolate a single coordinate in [0, 1]^d using the sparse grid
@@ -139,7 +139,7 @@ def interpolate_single_coordinate(
             wavelet=wavelet,
         )[0]
 
-    return value
+    return float(value)
 
 
 def interpolate_many_coordinates(
@@ -170,15 +170,20 @@ def interpolate_many_coordinates(
 
 
 def interpolate(
-    coordinates: Sequence[float],
+    coordinates: Sequence[float] | npt.NDArray,
     spghtensors: SparseGridHierarchicalTensors,
-) -> float:
+) -> float | npt.NDArray[np.float64]:
     """Evaluate the hierarchical tensors at coordinates in [0, 1]^d, using
-    the basis recorded on the container."""
-    # assert that all coordinates are within the unit hypercube [0, 1]^d
-    if isinstance(coordinates[0], float) or isinstance(coordinates[0], np.float32):
-        return interpolate_single_coordinate(coordinates, spghtensors)
-    elif isinstance(coordinates[0], (Sequence, np.ndarray)):
-        return interpolate_many_coordinates(coordinates, spghtensors)
-    else:
-        raise ValueError("Unexpected type for coordinates")
+    the basis recorded on the container.
+
+    A single coordinate (a 1-D sequence of d numbers, of any numeric type)
+    returns a scalar; a batch of shape (..., d) returns an array of the
+    batch shape. Coordinates on 1.0 belong to the last cell."""
+    coordinates_np = np.asarray(coordinates, dtype=np.float64)
+    if coordinates_np.ndim == 0:
+        raise ValueError(
+            "Coordinates must be a sequence of d numbers or a batch of shape (..., d)"
+        )
+    if coordinates_np.ndim == 1:
+        return interpolate_single_coordinate(coordinates_np, spghtensors)
+    return interpolate_many_coordinates(coordinates_np, spghtensors)
