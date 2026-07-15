@@ -57,7 +57,7 @@ def test_compress_partial_sparsifies_low_density():
     compressed = compress(tensors, epsilon=0.1)
     data = compressed.subspaces[(3, 3)].data
     assert data is not None
-    assert data.kind == TensorKind.LINEAR  # only compress() sparsifies
+    assert data.kind == TensorKind.POINTWISE  # only compress() sparsifies
     assert data.nnz == 1
     dense = data.to_dense()
     assert dense[0, 0] == 5.0

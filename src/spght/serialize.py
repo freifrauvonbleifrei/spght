@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Binary serialization of SparseGridHierarchicalTensors, format v0.3.
+"""Binary serialization of SparseGridHierarchicalTensors, format v0.4.
 
 Layout (little endian throughout):
 
@@ -23,12 +23,34 @@ File header:
                                                shared by all dimensions,
                                                0 = one descriptor per dimension
                                descriptor(s)   see basis descriptor below
+    metadata block         uint32 byte length (skippable wholesale), then:
+                               num entries     uint16
+                               entries         see metadata entry below
     subspace table         one entry per subspace, in the canonical
                            (level sum, lexicographic) order:
                                level vector    uint8 per dimension
                                record offset   uint64, absolute from file start
     header checksum        uint32, crc32 of all preceding header bytes
                            (magic through subspace table), verified on read
+
+Metadata entry -- descriptive key-value payload. Metadata NEVER influences
+how the rest of the file is parsed; a reader that skips the whole block
+loses labels, not correctness:
+    key length             uint8, 1..63
+    key                    ascii, charset [a-z0-9_.-]; keys are unique;
+                           un-prefixed keys are reserved for this spec
+                           (suggested: field_name, dimension_names,
+                           domain_min, domain_max, time, created_by),
+                           applications should prefix theirs (e.g. "x-")
+    value tag              uint8: utf-8 string=0, float64=1, int64=2,
+                           float64 array=3, int64 array=4, bytes=5,
+                           string array=6 (uint16 count, then per string
+                           uint16 byte length + utf-8 bytes)
+    payload length         uint32, validated against the enclosing block
+                           before any read
+    payload                per-tag encoding; readers preserve entries with
+                           unknown tags verbatim (additive extensibility)
+                           and never interpret them
 
 Basis descriptor -- the lifting program of one dimension's wavelet, fully
 self-describing (a reader reconstructs by running the steps backwards):
@@ -54,21 +76,21 @@ The subspace table makes each record independently addressable.
 Ordering the subspaces makes the format "scalable" in the JPEG2000 sense.
 
 Subspace record:
-    extents                uint64 per dimension
+    extents                uint32 per dimension
     order code             uint8: C=0, F=1, ZC=2, ZF=3
     tensor kind            uint8, TensorKind value
     value dtype            numpy kind char (1 byte) + itemsize (uint8)
     precision bits         uint16
     padding bits           uint16
     compression            uint8
-    quantization_scale     float64
-    quantization_offset    float64
+    quantization_scale     float32; reserved, with the future semantics
+    quantization_zero_pt   int32     logical = scale * (stored - zero_point)
     num stored entries     uint64
     num data bytes         uint64
     checksum               uint32, crc32 of the data blob (verified on read)
 
     data blob:
-        LINEAR             linear indices in the smallest unsigned dtype that
+        POINTWISE          linear indices in the smallest unsigned dtype that
                            fits prod(extents), then the linear value buffer
         FULL               the linear value buffer
         EMPTY              nothing
@@ -93,6 +115,8 @@ from spght.basis import (
     VertexCentered,
 )
 from spght.data_structures import (
+    MetadataValue,
+    OpaqueValue,
     SparseGridHierarchicalTensors,
     Subspace,
 )
@@ -102,14 +126,14 @@ from spght.tensor import DenseTensor, SparseTensor, Tensor, TensorKind
 from spght.util import per_dimension
 
 FormatMagic = b"sparse grid hierarchical tensors\0"
-FormatVersion: tuple[int, int] = (0, 3)
+FormatVersion: tuple[int, int] = (0, 4)
 
 _ORDER_TO_CODE: dict[Order, int] = {"C": 0, "F": 1, "ZC": 2, "ZF": 3}
 _CODE_TO_ORDER: dict[int, Order] = {c: o for o, c in _ORDER_TO_CODE.items()}
 
 _HEADER = struct.Struct("<33sBBHQ")  # magic, major, minor, ndim, num subspaces
 _HEADER_CRC = struct.Struct("<I")  # closes the header, covers all bytes before it
-_RECORD = struct.Struct("<BBcBHHBddQQI")  # see subspace record layout above
+_RECORD = struct.Struct("<BBcBHHBfiQQI")  # see subspace record layout above
 
 
 _BC = struct.Struct("<Bd")  # boundary rule code + Dirichlet wall value
@@ -267,6 +291,155 @@ def _decode_basis_block(block: bytes, num_dims: int) -> tuple[Basis1D, ...]:
     return bases
 
 
+_METADATA_KEY_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_.-")
+_TAG_STRING = 0
+_TAG_FLOAT64 = 1
+_TAG_INT64 = 2
+_TAG_FLOAT64_ARRAY = 3
+_TAG_INT64_ARRAY = 4
+_TAG_BYTES = 5
+_TAG_STRING_ARRAY = 6
+_KNOWN_TAGS = frozenset(range(7))
+
+
+def _encode_metadata_value(value: MetadataValue) -> tuple[int, bytes]:
+    """Encode one metadata value as (tag, payload). Metadata is descriptive
+    only, so the type surface is deliberately small and flat."""
+    if isinstance(value, OpaqueValue):
+        if value.tag in _KNOWN_TAGS:
+            raise ValueError(
+                f"OpaqueValue tag {value.tag} collides with a known tag; "
+                "use the native type instead"
+            )
+        return value.tag, value.payload
+    if isinstance(value, str):
+        return _TAG_STRING, value.encode("utf-8")
+    if isinstance(value, bytes):
+        return _TAG_BYTES, value
+    if isinstance(value, (bool, int, np.integer)):
+        return _TAG_INT64, struct.pack("<q", int(value))
+    if isinstance(value, (float, np.floating)):
+        return _TAG_FLOAT64, struct.pack("<d", float(value))
+    if isinstance(value, (list, tuple, np.ndarray)):
+        if isinstance(value, (list, tuple)) and all(
+            isinstance(item, str) for item in value
+        ):
+            encoded_strings = [item.encode("utf-8") for item in value]
+            if len(encoded_strings) > 65535 or any(
+                len(item) > 65535 for item in encoded_strings
+            ):
+                raise ValueError("String array metadata entry is too large")
+            payload = struct.pack("<H", len(encoded_strings))
+            for item in encoded_strings:
+                payload += struct.pack("<H", len(item)) + item
+            return _TAG_STRING_ARRAY, payload
+        array = np.asarray(value)
+        if array.ndim != 1:
+            raise ValueError("Array metadata values must be one-dimensional")
+        if array.dtype.kind == "f":
+            return _TAG_FLOAT64_ARRAY, array.astype("<f8").tobytes()
+        if array.dtype.kind in "iu":
+            return _TAG_INT64_ARRAY, array.astype("<i8").tobytes()
+        raise ValueError(f"Cannot serialize metadata array of dtype {array.dtype}")
+    raise ValueError(f"Cannot serialize metadata value of type {type(value)!r}")
+
+
+def _decode_metadata_value(tag: int, payload: bytes) -> MetadataValue:
+    if tag == _TAG_STRING:
+        return payload.decode("utf-8")  # strict: bad utf-8 raises
+    if tag == _TAG_FLOAT64:
+        if len(payload) != 8:
+            raise ValueError("float64 metadata payload must be 8 bytes")
+        return float(struct.unpack("<d", payload)[0])
+    if tag == _TAG_INT64:
+        if len(payload) != 8:
+            raise ValueError("int64 metadata payload must be 8 bytes")
+        return int(struct.unpack("<q", payload)[0])
+    if tag == _TAG_FLOAT64_ARRAY:
+        if len(payload) % 8 != 0:
+            raise ValueError("float64 array metadata payload size mismatch")
+        return tuple(float(x) for x in np.frombuffer(payload, dtype="<f8"))
+    if tag == _TAG_INT64_ARRAY:
+        if len(payload) % 8 != 0:
+            raise ValueError("int64 array metadata payload size mismatch")
+        return tuple(int(x) for x in np.frombuffer(payload, dtype="<i8"))
+    if tag == _TAG_BYTES:
+        return payload
+    if tag == _TAG_STRING_ARRAY:
+        (count,) = struct.unpack_from("<H", payload, 0)
+        pos = 2
+        strings = []
+        for _ in range(count):
+            if pos + 2 > len(payload):
+                raise ValueError("String array metadata payload is truncated")
+            (length,) = struct.unpack_from("<H", payload, pos)
+            pos += 2
+            if pos + length > len(payload):
+                raise ValueError("String array metadata payload is truncated")
+            strings.append(payload[pos : pos + length].decode("utf-8"))
+            pos += length
+        if pos != len(payload):
+            raise ValueError("String array metadata payload has trailing bytes")
+        return tuple(strings)
+    # unknown tag: preserve verbatim, never interpret
+    return OpaqueValue(tag, payload)
+
+
+def _validate_metadata_key(key: str) -> bytes:
+    if not 1 <= len(key) <= 63 or not set(key) <= _METADATA_KEY_CHARS:
+        raise ValueError(
+            f"Metadata keys must be 1-63 characters of [a-z0-9_.-], got {key!r}"
+        )
+    return key.encode("ascii")
+
+
+def _encode_metadata_block(metadata: "dict[str, MetadataValue]") -> bytes:
+    """The metadata block including its uint32 length prefix."""
+    if len(metadata) > 65535:
+        raise ValueError("Too many metadata entries")
+    block = struct.pack("<H", len(metadata))
+    for key, value in metadata.items():
+        encoded_key = _validate_metadata_key(key)
+        tag, payload = _encode_metadata_value(value)
+        block += struct.pack("<B", len(encoded_key)) + encoded_key
+        block += struct.pack("<BI", tag, len(payload)) + payload
+    return struct.pack("<I", len(block)) + block
+
+
+def _decode_metadata_block(block: bytes) -> "dict[str, MetadataValue]":
+    # everything is parsed from the already-read block buffer; every length
+    # is validated against it before slicing, so corrupted lengths cannot
+    # over-read or drive allocations
+    (num_entries,) = struct.unpack_from("<H", block, 0)
+    pos = 2
+    metadata: dict[str, MetadataValue] = {}
+    for _ in range(num_entries):
+        if pos + 1 > len(block):
+            raise ValueError("Metadata block is truncated")
+        (key_length,) = struct.unpack_from("<B", block, pos)
+        pos += 1
+        if not 1 <= key_length <= 63 or pos + key_length > len(block):
+            raise ValueError("Invalid metadata key length")
+        key = block[pos : pos + key_length].decode("ascii")
+        if not set(key) <= _METADATA_KEY_CHARS:
+            raise ValueError(f"Invalid characters in metadata key {key!r}")
+        pos += key_length
+        if pos + 5 > len(block):
+            raise ValueError("Metadata block is truncated")
+        tag, payload_length = struct.unpack_from("<BI", block, pos)
+        pos += 5
+        if pos + payload_length > len(block):
+            raise ValueError("Metadata payload exceeds its block")
+        payload = block[pos : pos + payload_length]
+        pos += payload_length
+        if key in metadata:
+            raise ValueError(f"Duplicate metadata key {key!r}")
+        metadata[key] = _decode_metadata_value(tag, payload)
+    if pos != len(block):
+        raise ValueError("Metadata block has trailing bytes")
+    return metadata
+
+
 def _index_dtype(total: int) -> np.dtype:
     """Smallest little-endian unsigned dtype that can hold indices < total."""
     for dtype_str in ("<u1", "<u2", "<u4"):
@@ -300,11 +473,25 @@ def _cheapest_kind(data: Tensor) -> TensorKind:
     index_itemsize = _index_dtype(data.size).itemsize
     sparse_bytes = data.nnz * (index_itemsize + data.dtype.itemsize)
     dense_bytes = data.size * data.dtype.itemsize
-    return TensorKind.LINEAR if sparse_bytes < dense_bytes else TensorKind.FULL
+    return TensorKind.POINTWISE if sparse_bytes < dense_bytes else TensorKind.FULL
 
 
 def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
-    extents = struct.pack(f"<{num_dims}Q", *subspace.extents)
+    if subspace.compression != 0:
+        raise ValueError(
+            f"Reserved compression byte must be 0, got {subspace.compression}"
+        )
+    if subspace.quantization_scale != 1.0 or subspace.quantization_zero_point != 0:
+        raise ValueError(
+            "The quantization fields are reserved: only identity "
+            "(scale=1, zero_point=0) can be serialized"
+        )
+    if any(not 0 <= extent <= 0xFFFFFFFF for extent in subspace.extents):
+        raise ValueError(
+            f"Extents must fit in uint32 each, got {subspace.extents} "
+            "(this caps levels at 31 per dimension)"
+        )
+    extents = struct.pack(f"<{num_dims}I", *subspace.extents)
     data = subspace.data
     if data is None:
         kind = TensorKind.EMPTY
@@ -347,7 +534,7 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
         subspace.padding_bits,
         subspace.compression,
         subspace.quantization_scale,
-        subspace.quantization_offset,
+        subspace.quantization_zero_point,
         num_stored,
         len(blob),
         zlib.crc32(blob),
@@ -356,7 +543,7 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
 
 
 def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
-    extents = struct.unpack(f"<{num_dims}Q", _read_exactly(stream, 8 * num_dims))
+    extents = struct.unpack(f"<{num_dims}I", _read_exactly(stream, 4 * num_dims))
     (
         order_code,
         kind_code,
@@ -366,7 +553,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         padding_bits,
         compression,
         quantization_scale,
-        quantization_offset,
+        quantization_zero_point,
         num_stored,
         num_blob_bytes,
         checksum,
@@ -381,6 +568,12 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
     kind = TensorKind(kind_code)  # raises ValueError for unknown codes
     if compression != 0:
         raise ValueError(f"Reserved compression byte must be 0, got {compression}")
+    if quantization_scale != 1.0 or quantization_zero_point != 0:
+        raise ValueError(
+            "Reserved quantization fields must be identity "
+            f"(scale=1, zero_point=0), got scale={quantization_scale}, "
+            f"zero_point={quantization_zero_point}"
+        )
     shape = tuple(int(e) for e in extents)
     total = math.prod(shape) if shape else 1  # Python ints: no int64 overflow
     try:
@@ -398,7 +591,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         if num_stored != total:
             raise ValueError("Full subspace record must store every entry")
         expected_blob_bytes = total * itemsize
-    else:  # TensorKind.LINEAR
+    else:  # TensorKind.POINTWISE
         if num_stored > total:
             raise ValueError("Sparse subspace stores more entries than it has")
         index_dtype = _index_dtype(total)
@@ -419,7 +612,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
             value_dtype
         )
         data = DenseTensor(flat, shape, order=order)
-    else:  # TensorKind.LINEAR
+    else:  # TensorKind.POINTWISE
         split = num_stored * index_dtype.itemsize
         keys = np.frombuffer(blob[:split], dtype=index_dtype).astype(np.int64)
         values = np.frombuffer(
@@ -433,7 +626,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         precision_bits=precision_bits,
         data=data,
         quantization_scale=quantization_scale,
-        quantization_offset=quantization_offset,
+        quantization_zero_point=quantization_zero_point,
         padding_bits=padding_bits,
         compression=compression,
     )
@@ -442,7 +635,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
 def write(
     tensors: SparseGridHierarchicalTensors, target: "str | Path | BinaryIO"
 ) -> None:
-    """Write the hierarchy to a path or binary stream in the v0.3 layout."""
+    """Write the hierarchy to a path or binary stream in the v0.4 layout."""
     num_dims = tensors.dimensions
     if not 1 <= num_dims <= 65535:
         raise ValueError(f"Number of dimensions must fit in uint16, got {num_dims}")
@@ -454,11 +647,13 @@ def write(
         _encode_record(subspace, num_dims) for subspace in tensors.subspaces.values()
     ]
     basis_block = _encode_basis_block(tensors.bases)  # includes its length prefix
+    metadata_block = _encode_metadata_block(tensors.metadata)  # ditto
     table_entry = struct.Struct(f"<{num_dims}BQ")
     header_size = (
         _HEADER.size
         + 2 * num_dims  # max level + min level
         + len(basis_block)
+        + len(metadata_block)
         + len(records) * table_entry.size
         + _HEADER_CRC.size
     )
@@ -474,6 +669,7 @@ def write(
         + struct.pack(f"<{num_dims}B", *tensors.max_level)
         + struct.pack(f"<{num_dims}B", *tensors.min_level)
         + basis_block
+        + metadata_block
         + table
     )
     stream, should_close = _open_stream(target, "wb")
@@ -505,6 +701,9 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
         basis_length_bytes = _read_exactly(stream, 4)
         (basis_length,) = struct.unpack("<I", basis_length_bytes)
         basis_block = _read_exactly(stream, basis_length)
+        metadata_length_bytes = _read_exactly(stream, 4)
+        (metadata_length,) = struct.unpack("<I", metadata_length_bytes)
+        metadata_block = _read_exactly(stream, metadata_length)
         table_entry = struct.Struct(f"<{num_dims}BQ")
         table_bytes = _read_exactly(stream, num_subspaces * table_entry.size)
         (header_crc,) = _HEADER_CRC.unpack(_read_exactly(stream, _HEADER_CRC.size))
@@ -514,6 +713,8 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
                 + levels_bytes
                 + basis_length_bytes
                 + basis_block
+                + metadata_length_bytes
+                + metadata_block
                 + table_bytes
             )
             != header_crc
@@ -523,6 +724,7 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
         max_level = struct.unpack(f"<{num_dims}B", levels_bytes[:num_dims])
         min_level = struct.unpack(f"<{num_dims}B", levels_bytes[num_dims:])
         bases = _decode_basis_block(basis_block, num_dims)
+        metadata = _decode_metadata_block(metadata_block)
         table: list[tuple[tuple[int, ...], int]] = []
         for i in range(num_subspaces):
             entry = table_entry.unpack_from(table_bytes, i * table_entry.size)
@@ -544,4 +746,5 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
         min_level=tuple(min_level),
         bases=bases,
         subspaces=subspaces,
+        metadata=metadata,
     )

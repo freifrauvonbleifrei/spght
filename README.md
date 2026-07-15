@@ -21,9 +21,7 @@ with `interpolate`, and written to / read from the binary file format
 documented below.
 
 ## Installation
-
-spght requires Python >= 3.10; its dependencies (`numpy`, `PyWavelets`,
-`bitarray`) are installed automatically. Install straight from GitHub:
+Install straight from GitHub:
 
 ```shell
 pip install git+https://github.com/freifrauvonbleifrei/spght.git
@@ -127,7 +125,7 @@ header, in table order.
 
 | size (bytes) | type | field |
 |---|---|---|
-| `8 * d` | uint64 each | extents (logical shape of the subspace) |
+| `4 * d` | uint32 each | extents (logical shape of the subspace) |
 | 1 | uint8 | linearization order code: `C` = 0, `F` = 1, `ZC` = 2, `ZF` = 3 |
 | 1 | uint8 | tensor kind: `EMPTY` = 0, `FULL` = 1, `LINEAR` = 2 |
 | 1 | char | value dtype: numpy kind character (`f` float, `i` signed int, `u` unsigned int, ...) |
@@ -135,8 +133,8 @@ header, in table order.
 | 2 | uint16 | precision bits |
 | 2 | uint16 | padding bits |
 | 1 | uint8 | compression (0 = none; reserved) |
-| 8 | float64 | `quantization_scale` (reserved, see below) |
-| 8 | float64 | `quantization_offset` (reserved) |
+| 4 | float32 | `quantization_scale` (reserved, see below) |
+| 4 | int32 | `quantization_zero_point` (reserved) |
 | 8 | uint64 | number of stored entries |
 | 8 | uint64 | number of bytes in the data blob |
 | 4 | uint32 | CRC-32 (zlib) checksum of the data blob, verified on read |
@@ -207,14 +205,12 @@ classic full decomposition.
 
 ### Normalization / quantization (reserved)
 
-Each subspace record carries two float64 fields reserved for future
-per-subspace normalization/quantization support: `quantization_scale`
-(default 1.0) and `quantization_offset` (default 0.0). They are stored and
-round-tripped but not yet interpreted; readers must currently return the
-value buffer unchanged. Together with the integer value dtypes the format
-already supports, they are intended to describe how stored (e.g.
-int8-quantized or normalized) coefficients map back to logical coefficient
-values.
+Each subspace record carries two fields reserved for future per-subspace
+quantization support, with the intended semantics
+`logical = quantization_scale * (stored - quantization_zero_point)`: a
+float32 scale (default 1.0) and an int32 zero-point in units of the scale
+(default 0).. Both writer and reader enforce the identity
+values (scale = 1, zero_point = 0): a file with anything else is currently rejected with an error. 
 
 ### Linearization orders
 
@@ -236,8 +232,8 @@ the linear buffer (and what the `LINEAR` indices refer to):
   versions, verify the header CRC-32 before trusting the subspace table, and
   verify each record's CRC-32 before trusting its blob.
 - The number of dimensions is a uint16: 1 to 65535. Levels are stored as
-  single bytes: at most 255 per dimension. Extents and subspace counts are
-  uint64.
+  single bytes. Extents are uint32 per dimension -- which effectively
+  caps levels to 32 per dimension -- and byte counts are uint64.
 - `precision_bits` is carried per subspace but not yet enforced as a storage
   width; values are stored at their dtype's width. `compression` is reserved
   and must currently be 0.

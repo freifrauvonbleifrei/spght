@@ -27,7 +27,7 @@ class TensorKind(IntEnum):
 
     EMPTY = 0  # no stored values, all entries implicitly zero (the default)
     FULL = 1  # dense: complete value buffer, no index list
-    LINEAR = 2  # sparse: sorted single linear indices + matching values
+    POINTWISE = 2  # sparse: individual sorted linear indices + matching values
     # future, e.g.: INTERVALS = 3  (runs of linear indices)
 
 
@@ -277,7 +277,7 @@ class DenseTensor(Tensor):
 class SparseTensor(Tensor):
     """Sorted linear indices + matching values."""
 
-    kind = TensorKind.LINEAR
+    kind = TensorKind.POINTWISE
 
     def __init__(
         self,

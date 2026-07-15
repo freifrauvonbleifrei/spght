@@ -24,6 +24,8 @@ from spght.basis import (
 )
 from spght.compress import compress
 from spght.data_structures import (
+    MetadataValue,
+    OpaqueValue,
     SparseGridHierarchicalTensors,
     Subspace,
     subspace_order_key,
@@ -47,6 +49,8 @@ except PackageNotFoundError:  # not installed, e.g. running from a checkout
     __version__ = "unknown"
 
 __all__ = [
+    "MetadataValue",
+    "OpaqueValue",
     "Basis1D",
     "BoundaryRule",
     "CellCentered",

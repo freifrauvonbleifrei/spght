@@ -32,6 +32,7 @@ def _assert_equal_containers(
     assert actual.max_level == tuple(int(level) for level in expected.max_level)
     assert actual.min_level == tuple(int(level) for level in expected.min_level)
     assert actual.bases == expected.bases  # structural Basis1D equality
+    assert actual.metadata == expected.metadata
     assert list(actual.subspaces.keys()) == list(expected.subspaces.keys())
     for level, expected_subspace in expected.subspaces.items():
         actual_subspace = actual.subspaces[level]
@@ -43,7 +44,8 @@ def _assert_equal_containers(
             actual_subspace.quantization_scale == expected_subspace.quantization_scale
         )
         assert (
-            actual_subspace.quantization_offset == expected_subspace.quantization_offset
+            actual_subspace.quantization_zero_point
+            == expected_subspace.quantization_zero_point
         )
         assert actual_subspace.order == expected_subspace.order
         if expected_subspace.data is None:
@@ -53,7 +55,7 @@ def _assert_equal_containers(
             assert actual_subspace.data is not None
             assert actual_subspace.data.dtype == expected_subspace.data.dtype
             # the on-disk kind is re-chosen at write time (whichever of
-            # FULL/LINEAR is smaller), so compare bit-exact dense views
+            # FULL/POINTWISE is smaller), so compare bit-exact dense views
             assert np.array_equal(
                 actual_subspace.data.to_dense(),
                 expected_subspace.data.to_dense(),
@@ -71,12 +73,12 @@ def test_roundtrip_hierarchized_via_path(tmp_path):
 
 
 def test_roundtrip_compressed_via_bytesio():
-    # localized bump -> compression produces a mix of FULL and LINEAR kinds
+    # localized bump -> compression produces a mix of FULL and POINTWISE kinds
     x, y = np.meshgrid(np.linspace(0, 1, 32), np.linspace(0, 1, 32), indexing="ij")
     nodal_values = np.exp(-((x - 0.3) ** 2 + (y - 0.6) ** 2) / 0.002)
     tensors = compress(hierarchize(nodal_values), epsilon=1e-3)
     kinds = {subspace.kind for subspace in tensors.subspaces.values()}
-    assert kinds == {TensorKind.FULL, TensorKind.LINEAR}  # exercises both
+    assert kinds == {TensorKind.FULL, TensorKind.POINTWISE}  # exercises both
 
     buffer = io.BytesIO()
     tensors.write(buffer)
@@ -116,10 +118,9 @@ def test_roundtrip_all_kinds_orders_and_dtypes(tmp_path):
             (2, 1): Subspace(
                 extents=(2, 2),
                 precision_bits=8,
-                # int8-stored coefficients + the reserved quantization fields
+                # int8-stored coefficients; the reserved quantization
+                # fields must stay identity to be serializable
                 data=DenseTensor.from_dense(np.array([[1, 2], [3, 4]], dtype=np.int8)),
-                quantization_scale=0.25,
-                quantization_offset=2.0,
             ),
         },
     )
@@ -130,12 +131,7 @@ def test_roundtrip_all_kinds_orders_and_dtypes(tmp_path):
     assert read_back.subspaces[(1, 0)].kind == TensorKind.EMPTY
     assert read_back.subspaces[(1, 2)].data.dtype == np.float32
     assert read_back.subspaces[(2, 2)].order == "ZC"
-    quantized = read_back.subspaces[(2, 1)]
-    assert quantized.data.dtype == np.int8
-    assert (
-        quantized.quantization_scale,
-        quantized.quantization_offset,
-    ) == (0.25, 2.0)
+    assert read_back.subspaces[(2, 1)].data.dtype == np.int8
 
 
 def test_write_picks_cheapest_on_disk_kind():
@@ -164,7 +160,7 @@ def test_write_picks_cheapest_on_disk_kind():
     loaded = SparseGridHierarchicalTensors.read(buffer)
     # the dense-stored but nearly-empty subspace comes back sparse, the
     # sparse-stored but fully-populated one comes back dense ...
-    assert loaded.subspaces[(2, 1)].kind == TensorKind.LINEAR
+    assert loaded.subspaces[(2, 1)].kind == TensorKind.POINTWISE
     assert loaded.subspaces[(2, 2)].kind == TensorKind.FULL
     # ... both with unchanged values
     for level in tensors.subspaces:
@@ -352,15 +348,16 @@ def _first_record_offset(raw: bytes) -> tuple[int, int]:
     (num_dims,) = _struct.unpack_from("<H", raw, 35)
     (num_subspaces,) = _struct.unpack_from("<Q", raw, 37)
     (basis_length,) = _struct.unpack_from("<I", raw, 45 + 2 * num_dims)
-    return (
-        45 + 2 * num_dims + 4 + basis_length + num_subspaces * (num_dims + 8) + 4
-    ), num_dims
+    metadata_start = 45 + 2 * num_dims + 4 + basis_length
+    (metadata_length,) = _struct.unpack_from("<I", raw, metadata_start)
+    table_start = metadata_start + 4 + metadata_length
+    return table_start + num_subspaces * (num_dims + 8) + 4, num_dims
 
 
 def test_read_rejects_unknown_order_code():
     corrupted = _valid_file_bytes()
     record, num_dims = _first_record_offset(corrupted)
-    corrupted[record + 8 * num_dims] = 9  # order code, outside the record CRC
+    corrupted[record + 4 * num_dims] = 9  # order code, outside the record CRC
     with pytest.raises(ValueError, match="order code"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
 
@@ -369,7 +366,7 @@ def test_read_rejects_reserved_compression_byte():
     corrupted = _valid_file_bytes()
     record, num_dims = _first_record_offset(corrupted)
     # after order, kind, dtype char, itemsize, precision (2), padding (2)
-    corrupted[record + 8 * num_dims + 8] = 5
+    corrupted[record + 4 * num_dims + 8] = 5
     with pytest.raises(ValueError, match="compression"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
 
@@ -377,7 +374,7 @@ def test_read_rejects_reserved_compression_byte():
 def test_read_rejects_invalid_dtype():
     corrupted = _valid_file_bytes()
     record, num_dims = _first_record_offset(corrupted)
-    corrupted[record + 8 * num_dims + 2] = ord("x")  # dtype kind char
+    corrupted[record + 4 * num_dims + 2] = ord("x")  # dtype kind char
     with pytest.raises(ValueError, match="dtype"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
 
@@ -389,7 +386,9 @@ def test_read_rejects_duplicate_table_entries():
     (num_subspaces,) = _struct.unpack_from("<Q", corrupted, 37)
     assert num_subspaces >= 2
     (basis_length,) = _struct.unpack_from("<I", corrupted, 45 + 2 * num_dims)
-    table = 45 + 2 * num_dims + 4 + basis_length
+    metadata_start = 45 + 2 * num_dims + 4 + basis_length
+    (metadata_length,) = _struct.unpack_from("<I", corrupted, metadata_start)
+    table = metadata_start + 4 + metadata_length
     entry_size = num_dims + 8
     # copy the first table entry over the second, then re-seal the header CRC
     corrupted[table + entry_size : table + 2 * entry_size] = corrupted[
@@ -409,3 +408,151 @@ def test_container_equality_roundtrip():
     tensors.write(buffer)
     buffer.seek(0)
     assert SparseGridHierarchicalTensors.read(buffer) == tensors
+
+
+def test_metadata_roundtrip_all_tags():
+    from spght.data_structures import OpaqueValue
+
+    tensors = hierarchize(np.random.default_rng(30).random((4, 4)))
+    tensors.metadata = {
+        "field_name": "density",
+        "time": 0.125,
+        "x-step": 42,
+        "domain_min": (0.0, -1.5),
+        "x-bbox-min": (-32, 7),
+        "x-blob": b"\x00\xff\x80",
+        "dimension_names": ("radial", "poloidal"),
+        "x-future": OpaqueValue(200, b"anything"),
+    }
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    loaded = SparseGridHierarchicalTensors.read(buffer)
+    assert loaded.metadata == tensors.metadata
+    # numeric sequences come back as tuples, exact
+    assert loaded.metadata["domain_min"] == (0.0, -1.5)
+    assert isinstance(loaded.metadata["x-step"], int)
+
+    # unknown tags survive a full read-modify-write cycle verbatim
+    second = io.BytesIO()
+    loaded.write(second)
+    second.seek(0)
+    again = SparseGridHierarchicalTensors.read(second)
+    assert again.metadata["x-future"] == OpaqueValue(200, b"anything")
+
+
+def test_metadata_survives_compress():
+    tensors = hierarchize(np.random.default_rng(31).random((4, 4)))
+    tensors.metadata = {"field_name": "density"}
+    assert compress(tensors, epsilon=0.1).metadata == {"field_name": "density"}
+
+
+def test_metadata_write_validation():
+    tensors = hierarchize(np.zeros(4))
+    for bad_key in ["", "UPPER", "with space", "k" * 64, "umlaut-ä"]:
+        tensors.metadata = {bad_key: 1}
+        with pytest.raises(ValueError, match="[Mm]etadata key"):
+            tensors.write(io.BytesIO())
+    tensors.metadata = {"x-object": object()}
+    with pytest.raises(ValueError, match="metadata value"):
+        tensors.write(io.BytesIO())
+    from spght.data_structures import OpaqueValue
+
+    tensors.metadata = {"x-collision": OpaqueValue(0, b"")}  # known tag
+    with pytest.raises(ValueError, match="collides"):
+        tensors.write(io.BytesIO())
+
+
+def _metadata_block_span(raw: bytes) -> tuple[int, int]:
+    (num_dims,) = _struct.unpack_from("<H", raw, 35)
+    (basis_length,) = _struct.unpack_from("<I", raw, 45 + 2 * num_dims)
+    metadata_start = 45 + 2 * num_dims + 4 + basis_length
+    (metadata_length,) = _struct.unpack_from("<I", raw, metadata_start)
+    return metadata_start + 4, metadata_length
+
+
+def _reseal_header_crc(raw: bytearray) -> None:
+    (num_dims,) = _struct.unpack_from("<H", raw, 35)
+    (num_subspaces,) = _struct.unpack_from("<Q", raw, 37)
+    (basis_length,) = _struct.unpack_from("<I", raw, 45 + 2 * num_dims)
+    metadata_start = 45 + 2 * num_dims + 4 + basis_length
+    (metadata_length,) = _struct.unpack_from("<I", raw, metadata_start)
+    crc_offset = metadata_start + 4 + metadata_length + num_subspaces * (num_dims + 8)
+    _struct.pack_into("<I", raw, crc_offset, _zlib.crc32(raw[:crc_offset]))
+
+
+def test_read_rejects_corrupted_metadata():
+    tensors = hierarchize(np.random.default_rng(32).random(8))
+    # two keys of equal length, so one key can be spliced over the other
+    tensors.metadata = {"name": "density", "time": 0.5}
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+
+    # oversized payload length: claims more bytes than the block holds
+    corrupted = bytearray(buffer.getvalue())
+    start, _ = _metadata_block_span(corrupted)
+    # entry layout: count(2) keylen(1) key tag(1) payload_len(4)
+    key_length = corrupted[start + 2]
+    payload_length_offset = start + 2 + 1 + key_length + 1
+    _struct.pack_into("<I", corrupted, payload_length_offset, 2**31)
+    _reseal_header_crc(corrupted)
+    with pytest.raises(ValueError, match="exceeds its block"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+    # invalid utf-8 in a string payload
+    corrupted = bytearray(buffer.getvalue())
+    payload_offset = payload_length_offset + 4
+    corrupted[payload_offset] = 0xFF
+    _reseal_header_crc(corrupted)
+    with pytest.raises(ValueError):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+    # duplicate keys: overwrite the second entry's key with the first's
+    corrupted = bytearray(buffer.getvalue())
+    first_key = corrupted[start + 3 : start + 3 + key_length]
+    (first_payload_length,) = _struct.unpack_from(
+        "<I", corrupted, payload_length_offset
+    )
+    second_entry = payload_offset + first_payload_length
+    second_key_length = corrupted[second_entry]
+    assert second_key_length == 4  # "time"
+    corrupted[second_entry + 1 : second_entry + 1 + 4] = first_key  # now "name" twice
+    _reseal_header_crc(corrupted)
+    with pytest.raises(ValueError, match="[Dd]uplicate metadata"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_write_rejects_reserved_fields():
+    tensors = hierarchize(np.zeros(4))
+    level = next(iter(tensors.subspaces))
+    # non-identity quantization fields cannot be serialized (reserved):
+    # spght must never produce a file it would refuse to read
+    tensors.subspaces[level] = replace(tensors.subspaces[level], quantization_scale=0.5)
+    with pytest.raises(ValueError, match="quantization"):
+        tensors.write(io.BytesIO())
+    # same for the reserved compression byte
+    tensors.subspaces[level] = replace(
+        tensors.subspaces[level], quantization_scale=1.0, compression=1
+    )
+    with pytest.raises(ValueError, match="compression"):
+        tensors.write(io.BytesIO())
+
+
+def test_read_rejects_nonidentity_quantization_fields():
+    corrupted = _valid_file_bytes()
+    record, num_dims = _first_record_offset(corrupted)
+    # the quantization scale sits after order(1) + kind(1) + dtype char(1)
+    # + itemsize(1) + precision(2) + padding(2) + compression(1) = 9 bytes
+    # of the fixed record part, which is not covered by the blob CRC
+    _struct.pack_into("<f", corrupted, record + 4 * num_dims + 9, 2.0)
+    with pytest.raises(ValueError, match="quantization"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_write_rejects_extents_beyond_uint32():
+    oversized = Subspace(extents=(2**33, 16), precision_bits=64)  # EMPTY data
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=2, max_level=(1, 1), subspaces={(1, 1): oversized}
+    )
+    with pytest.raises(ValueError, match="uint32"):
+        tensors.write(io.BytesIO())
