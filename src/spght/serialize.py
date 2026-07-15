@@ -29,7 +29,11 @@ File header:
     subspace table         one entry per subspace, in the canonical
                            (level sum, lexicographic) order:
                                level vector    uint8 per dimension
-                               record offset   uint64, absolute from file start
+                               record offset   uint64, relative to the start
+                                               of the spght payload (the
+                                               first magic byte) -- equal to
+                                               an absolute file offset when
+                                               the payload starts at byte 0
     header checksum        uint32, crc32 of all preceding header bytes
                            (magic through subspace table), verified on read
 
@@ -689,6 +693,8 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
     """Read a hierarchy from a path or (seekable) binary stream."""
     stream, should_close = _open_stream(source, "rb")
     try:
+        # table offsets are relative to the payload start
+        payload_start = stream.tell()
         fixed_header = _read_exactly(stream, _HEADER.size)
         magic, major, minor, num_dims, num_subspaces = _HEADER.unpack(fixed_header)
         if magic != FormatMagic:

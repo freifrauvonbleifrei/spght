@@ -116,12 +116,14 @@ Each **subspace table** entry is:
 | size (bytes) | type | field |
 |---|---|---|
 | `d` | uint8 each | level vector of the subspace |
-| 8 | uint64 | absolute byte offset of the subspace record from file start |
+| 8 | uint64 | byte offset of the subspace record, relative to the payload start (the first magic byte) — identical to an absolute offset when the payload starts at byte 0 |
 
 The table makes every record independently addressable, so a reader can
 select subspaces by level (e.g. to interpolate only at relevant scales)
 without scanning the file. Records are laid out contiguously after the
-header, in table order.
+header, in table order. Payload-relative offsets make embedding safe: a
+`.spght` payload stored at any position inside a larger file reads
+correctly once the reader seeks to its first magic byte.
 
 ### Subspace record
 
@@ -252,6 +254,20 @@ the linear buffer (and what the `POINTWISE` indices refer to):
   For power-of-two extents this is classic bit interleaving; for arbitrary
   extents the curve bisects each dimension's remaining extent into
   ceil/floor halves, staying bijective without padding.
+
+### Streaming writes
+
+The header-first layout is deliberate: a file *prefix* is a complete
+coarse approximation (see the canonical order above), which a
+footer/trailer layout would sacrifice. Single-pass writers are still
+possible on seekable outputs: the header's *size* is known before any
+record is written (levels, bases, and metadata are fixed up front), so a
+writer can reserve the header region, stream the records — each record's
+sizes are known when it starts, and the blob checksum follows the blob —
+and finally seek back to patch the subspace table and header checksum.
+For parallel (MPI-IO) writes, uncompressed FULL record sizes are
+deterministic from extents and dtype, so all ranks can compute their
+offsets without communication; one rank finalizes the header.
 
 ### Integrity and limits
 
