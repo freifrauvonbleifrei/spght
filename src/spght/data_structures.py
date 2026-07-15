@@ -8,13 +8,36 @@ The binary encoding details may still evolve.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Sequence
+from typing import BinaryIO, Sequence, Union
 
 from spght.lifting import Basis1D
 from spght.linearize import Order
 from spght.tensor import Tensor, TensorKind
 from spght.util import per_dimension
 from spght.wavelets import haar_basis
+
+
+@dataclass(frozen=True, slots=True)
+class OpaqueValue:
+    """A metadata entry whose value tag this version of spght does not
+    know. Don't touch."""
+
+    tag: int
+    payload: bytes
+
+
+# metadata values as they come back from a file: numeric sequences are
+# normalized to tuples so that containers compare cleanly
+MetadataValue = Union[
+    str,
+    float,
+    int,
+    bytes,
+    Sequence[str],
+    Sequence[float],
+    Sequence[int],
+    OpaqueValue,
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +101,9 @@ class SparseGridHierarchicalTensors:
     min_level: tuple[int, ...] = ()
     bases: tuple[Basis1D, ...] = ()
     subspaces: dict[tuple[int, ...], Subspace] = field(default_factory=dict)
+    # descriptive key-value metadata (field name, domain bounds, ...);
+    # carried and serialized, but not interpreted by spght, see serialize.py
+    metadata: dict[str, MetadataValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if len(self.max_level) != self.dimensions:
@@ -137,7 +163,7 @@ class SparseGridHierarchicalTensors:
         self._sort_subspaces()
 
     def write(self, target: "str | Path | BinaryIO") -> None:
-        """Write the hierarchy to disk in the v0.3 binary layout
+        """Write the hierarchy to disk in the v0.4 binary layout
         (see spght.serialize for the format description)."""
         # imported lazily: serialize imports this class
         from spght.serialize import write

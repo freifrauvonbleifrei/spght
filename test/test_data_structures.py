@@ -203,16 +203,16 @@ def test_tensor_kind():
     dense = DenseTensor.from_dense(array)
     sparse = SparseTensor.from_dense(array)
     assert dense.kind == TensorKind.FULL and not dense.is_sparse
-    assert sparse.kind == TensorKind.LINEAR and sparse.is_sparse
+    assert sparse.kind == TensorKind.POINTWISE and sparse.is_sparse
     # the kind is a class-level property of each implementation
     assert DenseTensor.kind == TensorKind.FULL
-    assert SparseTensor.kind == TensorKind.LINEAR
+    assert SparseTensor.kind == TensorKind.POINTWISE
     # numeric values are the (future) on-disk index-kind identifiers;
     # EMPTY is deliberately the zero value, so a zero-initialized header
     # reads as "no data"
     assert int(TensorKind.EMPTY) == 0
     assert int(TensorKind.FULL) == 1
-    assert int(TensorKind.LINEAR) == 2
+    assert int(TensorKind.POINTWISE) == 2
     # a subspace without data defaults to the EMPTY kind
     assert Subspace(extents=(2, 2), precision_bits=64).kind == TensorKind.EMPTY
 
@@ -231,7 +231,7 @@ def test_subspace_holds_tensor():
         precision_bits=64,
         data=SparseTensor.from_dense(array, order="C"),
     )
-    assert sparse_sub.kind == TensorKind.LINEAR
+    assert sparse_sub.kind == TensorKind.POINTWISE
     assert sparse_sub.is_sparse
 
     with pytest.raises(ValueError):
