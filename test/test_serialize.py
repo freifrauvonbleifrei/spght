@@ -372,7 +372,7 @@ def test_read_rejects_reserved_compression_byte():
 def test_read_rejects_invalid_dtype():
     corrupted = _valid_file_bytes()
     record, num_dims = _first_record_offset(corrupted)
-    corrupted[record + 8 * num_dims + 2] = ord("x")  # dtype kind char
+    corrupted[record + 4 * num_dims + 2] = ord("x")  # dtype kind char
     with pytest.raises(ValueError, match="dtype"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
 
