@@ -29,7 +29,11 @@ File header:
     subspace table         one entry per subspace, in the canonical
                            (level sum, lexicographic) order:
                                level vector    uint8 per dimension
-                               record offset   uint64, absolute from file start
+                               record offset   uint64, relative to the start
+                                               of the spght payload (the
+                                               first magic byte) -- equal to
+                                               an absolute file offset when
+                                               the payload starts at byte 0
     header checksum        uint32, crc32 of all preceding header bytes
                            (magic through subspace table), verified on read
 
@@ -87,13 +91,14 @@ Subspace record:
     quantization_zero_pt   int32     logical = scale * (stored - zero_point)
     num stored entries     uint64
     num data bytes         uint64
-    checksum               uint32, crc32 of the data blob (verified on read)
-
     data blob:
         POINTWISE          linear indices in the smallest unsigned dtype that
                            fits prod(extents), then the linear value buffer
         FULL               the linear value buffer
         EMPTY              nothing
+    checksum               uint32, crc32 of the data blob (verified on read);
+                           placed after the blob so a writer can stream the
+                           blob while accumulating the checksum
 """
 
 import math
@@ -133,7 +138,8 @@ _CODE_TO_ORDER: dict[int, Order] = {c: o for o, c in _ORDER_TO_CODE.items()}
 
 _HEADER = struct.Struct("<33sBBHQ")  # magic, major, minor, ndim, num subspaces
 _HEADER_CRC = struct.Struct("<I")  # closes the header, covers all bytes before it
-_RECORD = struct.Struct("<BBcBHHBfiQQI")  # see subspace record layout above
+_RECORD = struct.Struct("<BBcBHHBfiQQ")  # see subspace record layout above
+_RECORD_CRC = struct.Struct("<I")  # follows each record's data blob
 
 
 _BC = struct.Struct("<Bd")  # boundary rule code + Dirichlet wall value
@@ -537,9 +543,9 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
         subspace.quantization_zero_point,
         num_stored,
         len(blob),
-        zlib.crc32(blob),
     )
-    return extents + fixed + blob
+    # the blob checksum follows the blob
+    return extents + fixed + blob + _RECORD_CRC.pack(zlib.crc32(blob))
 
 
 def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
@@ -556,7 +562,6 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         quantization_zero_point,
         num_stored,
         num_blob_bytes,
-        checksum,
     ) = _RECORD.unpack(_read_exactly(stream, _RECORD.size))
 
     # validate every field the blob size derives from BEFORE reading the
@@ -600,6 +605,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         raise ValueError("Subspace data block has inconsistent size")
 
     blob = _read_exactly(stream, expected_blob_bytes)
+    (checksum,) = _RECORD_CRC.unpack(_read_exactly(stream, _RECORD_CRC.size))
     if zlib.crc32(blob) != checksum:
         raise ValueError("Subspace data block failed its checksum")
 
@@ -687,6 +693,8 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
     """Read a hierarchy from a path or (seekable) binary stream."""
     stream, should_close = _open_stream(source, "rb")
     try:
+        # table offsets are relative to the payload start
+        payload_start = stream.tell()
         fixed_header = _read_exactly(stream, _HEADER.size)
         magic, major, minor, num_dims, num_subspaces = _HEADER.unpack(fixed_header)
         if magic != FormatMagic:
@@ -732,7 +740,7 @@ def read(source: "str | Path | BinaryIO") -> SparseGridHierarchicalTensors:
 
         subspaces: dict[tuple[int, ...], Subspace] = {}
         for level, offset in table:
-            stream.seek(offset)
+            stream.seek(payload_start + offset)
             subspaces[level] = _decode_record(stream, num_dims)
         if len(subspaces) != num_subspaces:
             raise ValueError("Duplicate subspace levels in the table")

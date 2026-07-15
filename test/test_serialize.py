@@ -556,3 +556,13 @@ def test_write_rejects_extents_beyond_uint32():
     )
     with pytest.raises(ValueError, match="uint32"):
         tensors.write(io.BytesIO())
+
+
+def test_read_embedded_payload():
+    tensors = hierarchize(np.random.default_rng(40).random((8, 8)))
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    preamble = b"#!some container preamble\n"
+    container = io.BytesIO(preamble + buffer.getvalue() + b"trailing bytes")
+    container.seek(len(preamble))
+    _assert_equal_containers(tensors, SparseGridHierarchicalTensors.read(container))
