@@ -74,7 +74,7 @@ value = spght.interpolate(np.array([0.3, 0.6, 0.5]), loaded)
 For a complete worked example — compressing the WDAS cloud dataset and
 evaluating the reconstruction error — see [`example/README.md`](example/README.md).
 
-## File format, version 0.3
+## File format, version 0.4
 
 One spght file stores one `SparseGridHierarchicalTensors` container: a set of
 subspaces, each identified by its level vector `l = (l_1, ..., l_d)` and
@@ -99,15 +99,17 @@ General properties:
 |---|---|---|---|
 | 0 | 33 | bytes | magic string: ASCII `"sparse grid hierarchical tensors"` followed by one NUL byte |
 | 33 | 1 | uint8 | format version, major (currently 0) |
-| 34 | 1 | uint8 | format version, minor (currently 3) |
+| 34 | 1 | uint8 | format version, minor (currently 4) |
 | 35 | 2 | uint16 | number of dimensions `d` (1 to 65535) |
 | 37 | 8 | uint64 | number of subspaces `n` |
 | 45 | `d` | uint8 each | maximum level per dimension |
 | 45 + `d` | `d` | uint8 each | minimum level per dimension (see *Scaling vs. detail subspaces*) |
 | 45 + 2`d` | 4 | uint32 | byte length `b` of the basis block that follows (readers may skip it wholesale) |
 | 45 + 2`d` + 4 | `b` | basis block | uniformity flag + basis descriptor(s), see *Basis descriptors* |
-| 45 + 2`d` + 4 + `b` | `n * (d + 8)` | table entries | subspace table (see below) |
-| 45 + 2`d` + 4 + `b` + `n * (d + 8)` | 4 | uint32 | CRC-32 (zlib) checksum of all preceding header bytes, verified on read |
+| 45 + 2`d` + 4 + `b` | 4 | uint32 | byte length `m` of the metadata block that follows (skippable wholesale) |
+| ... | `m` | metadata block | uint16 entry count + key-value entries, see *Metadata* |
+| ... | `n * (d + 8)` | table entries | subspace table (see below) |
+| ... | 4 | uint32 | CRC-32 (zlib) checksum of all preceding header bytes, verified on read |
 
 Each **subspace table** entry is:
 
@@ -127,7 +129,7 @@ header, in table order.
 |---|---|---|
 | `4 * d` | uint32 each | extents (logical shape of the subspace) |
 | 1 | uint8 | linearization order code: `C` = 0, `F` = 1, `ZC` = 2, `ZF` = 3 |
-| 1 | uint8 | tensor kind: `EMPTY` = 0, `FULL` = 1, `LINEAR` = 2 |
+| 1 | uint8 | tensor kind: `EMPTY` = 0, `FULL` = 1, `POINTWISE` = 2 |
 | 1 | char | value dtype: numpy kind character (`f` float, `i` signed int, `u` unsigned int, ...) |
 | 1 | uint8 | value dtype: item size in bytes (together e.g. `f8` = float64, `i1` = int8) |
 | 2 | uint16 | precision bits |
@@ -137,8 +139,8 @@ header, in table order.
 | 4 | int32 | `quantization_zero_point` (reserved) |
 | 8 | uint64 | number of stored entries |
 | 8 | uint64 | number of bytes in the data blob |
-| 4 | uint32 | CRC-32 (zlib) checksum of the data blob, verified on read |
 | (blob) | bytes | data blob, see below |
+| 4 | uint32 | CRC-32 (zlib) checksum of the data blob, verified on read — placed *after* the blob so a writer can stream blob chunks while accumulating the checksum |
 
 ### Data blob
 
@@ -149,7 +151,7 @@ The blob content depends on the tensor kind:
   zero-initialized record reads as "no data".
 - **`FULL` (1)**: the complete linear value buffer, `prod(extents)` entries
   of the value dtype, in the subspace's linearization order.
-- **`LINEAR` (2)**: the sorted linear indices of the stored entries, followed
+- **`POINTWISE` (2)**: the individual sorted linear indices of the stored entries, followed
   by the matching value buffer. Indices are stored in the **smallest unsigned
   integer type that can hold `prod(extents) - 1`** (uint8 up to 256 entries,
   uint16 up to 2^16, uint32 up to 2^32, else uint64); this type is derived
@@ -187,6 +189,31 @@ determines the dof counts per level (e.g. `2^l` cells vs `2^l + 1`
 vertices), which is why extents in this format are always stored
 explicitly.
 
+### Metadata
+
+The metadata block carries descriptive key-value entries: what the field
+is, where it lives, who wrote it. Its design rule is security-relevant:
+**metadata never influences how the rest of the file is parsed** — every
+structural fact lives in the typed header fields, so a reader that skips
+the block (via its length prefix) loses labels, never correctness, and a
+corrupted or malicious block can at worst mislabel data.
+
+Each entry is `key length (uint8, 1-63)` + ASCII key (charset
+`[a-z0-9_.-]`, unique) + `value tag (uint8)` + `payload length (uint32)` +
+payload. Value tags: UTF-8 string = 0, float64 = 1, int64 = 2, float64
+array = 3, int64 array = 4, bytes = 5, string array = 6 (uint16 count,
+then per string a uint16 byte length + UTF-8 bytes). Every length is
+validated against the enclosing block before it is read.
+
+Entries with unknown tags are preserved verbatim across read-write cycles
+(surfaced as `spght.OpaqueValue`) and never interpreted — new value kinds
+are therefore additive. Un-prefixed keys are reserved for this
+specification; suggested (all optional): `field_name` (string),
+`dimension_names` (string array), `domain_min`/`domain_max` (float64
+array), `time` (float64), `created_by` (string). Applications should
+prefix their own keys, e.g. `x-`. spght itself never acts on metadata
+values: no paths are resolved, nothing is fetched or executed.
+
 ### Scaling vs. detail subspaces
 
 The minimum level (header) is where the wavelet cascade stops in each
@@ -215,7 +242,7 @@ values (scale = 1, zero_point = 0): a file with anything else is currently rejec
 ### Linearization orders
 
 The order code describes how the n-dimensional subspace is flattened into
-the linear buffer (and what the `LINEAR` indices refer to):
+the linear buffer (and what the `POINTWISE` indices refer to):
 
 - **`C` (0)**: row-major, last dimension varies fastest.
 - **`F` (1)**: column-major, first dimension varies fastest.
