@@ -116,10 +116,9 @@ def test_roundtrip_all_kinds_orders_and_dtypes(tmp_path):
             (2, 1): Subspace(
                 extents=(2, 2),
                 precision_bits=8,
-                # int8-stored coefficients + the reserved quantization fields
+                # int8-stored coefficients; the reserved quantization
+                # fields must stay identity to be serializable
                 data=DenseTensor.from_dense(np.array([[1, 2], [3, 4]], dtype=np.int8)),
-                quantization_scale=0.25,
-                quantization_offset=2.0,
             ),
         },
     )
@@ -130,12 +129,7 @@ def test_roundtrip_all_kinds_orders_and_dtypes(tmp_path):
     assert read_back.subspaces[(1, 0)].kind == TensorKind.EMPTY
     assert read_back.subspaces[(1, 2)].data.dtype == np.float32
     assert read_back.subspaces[(2, 2)].order == "ZC"
-    quantized = read_back.subspaces[(2, 1)]
-    assert quantized.data.dtype == np.int8
-    assert (
-        quantized.quantization_scale,
-        quantized.quantization_offset,
-    ) == (0.25, 2.0)
+    assert read_back.subspaces[(2, 1)].data.dtype == np.int8
 
 
 def test_write_picks_cheapest_on_disk_kind():
@@ -409,3 +403,13 @@ def test_container_equality_roundtrip():
     tensors.write(buffer)
     buffer.seek(0)
     assert SparseGridHierarchicalTensors.read(buffer) == tensors
+
+def test_read_rejects_nonidentity_quantization_fields():
+    corrupted = _valid_file_bytes()
+    record, num_dims = _first_record_offset(corrupted)
+    # the quantization scale sits after order(1) + kind(1) + dtype char(1)
+    # + itemsize(1) + precision(2) + padding(2) + compression(1) = 9 bytes
+    # of the fixed record part, which is not covered by the blob CRC
+    _struct.pack_into("<d", corrupted, record + 8 * num_dims + 9, 2.0)
+    with pytest.raises(ValueError, match="quantization"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))

@@ -21,9 +21,7 @@ with `interpolate`, and written to / read from the binary file format
 documented below.
 
 ## Installation
-
-spght requires Python >= 3.10; its dependencies (`numpy`, `PyWavelets`,
-`bitarray`) are installed automatically. Install straight from GitHub:
+Install straight from GitHub:
 
 ```shell
 pip install git+https://github.com/freifrauvonbleifrei/spght.git
@@ -209,9 +207,9 @@ classic full decomposition.
 
 Each subspace record carries two float64 fields reserved for future
 per-subspace normalization/quantization support: `quantization_scale`
-(default 1.0) and `quantization_offset` (default 0.0). They are stored and
-round-tripped but not yet interpreted; readers must currently return the
-value buffer unchanged. Together with the integer value dtypes the format
+(default 1.0) and `quantization_offset` (default 0.0). Both writer and
+reader enforce the identity values (scale = 1, offset = 0): a file with
+anything else is currently rejected with an error. Together with the integer value dtypes the format
 already supports, they are intended to describe how stored (e.g.
 int8-quantized or normalized) coefficients map back to logical coefficient
 values.

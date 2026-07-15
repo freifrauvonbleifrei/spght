@@ -304,6 +304,15 @@ def _cheapest_kind(data: Tensor) -> TensorKind:
 
 
 def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
+    if subspace.compression != 0:
+        raise ValueError(
+            f"Reserved compression byte must be 0, got {subspace.compression}"
+        )
+    if subspace.quantization_scale != 1.0 or subspace.quantization_offset != 0.0:
+        raise ValueError(
+            "The quantization fields are reserved: only identity "
+            "(scale=1, offset=0) can be serialized"
+        )
     extents = struct.pack(f"<{num_dims}Q", *subspace.extents)
     data = subspace.data
     if data is None:
@@ -381,6 +390,11 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
     kind = TensorKind(kind_code)  # raises ValueError for unknown codes
     if compression != 0:
         raise ValueError(f"Reserved compression byte must be 0, got {compression}")
+    if quantization_scale != 1.0 or quantization_offset != 0.0:
+        raise ValueError(
+            "Reserved quantization fields must be identity (scale=1, offset=0), "
+            f"got scale={quantization_scale}, offset={quantization_offset}"
+        )
     shape = tuple(int(e) for e in extents)
     total = math.prod(shape) if shape else 1  # Python ints: no int64 overflow
     try:
