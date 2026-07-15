@@ -74,7 +74,7 @@ value = spght.interpolate(np.array([0.3, 0.6, 0.5]), loaded)
 For a complete worked example — compressing the WDAS cloud dataset and
 evaluating the reconstruction error — see [`example/README.md`](example/README.md).
 
-## File format, version 0.4
+## File format, version 0.5
 
 One spght file stores one `SparseGridHierarchicalTensors` container: a set of
 subspaces, each identified by its level vector `l = (l_1, ..., l_d)` and
@@ -133,8 +133,10 @@ correctly once the reader seeks to its first magic byte.
 | 1 | uint8 | linearization order code: `C` = 0, `F` = 1, `ZC` = 2, `ZF` = 3 |
 | 1 | uint8 | tensor kind: `EMPTY` = 0, `FULL` = 1, `POINTWISE` = 2 |
 | 1 | char | value dtype: numpy kind character (`f` float, `i` signed int, `u` unsigned int, ...) |
-| 1 | uint8 | value dtype: item size in bytes (together e.g. `f8` = float64, `i1` = int8) |
-| 2 | uint16 | precision bits |
+| 1 | uint8 | value dtype: item size in bytes (together e.g. `f8` = float64, `i1` = int8); the dtype describes **one scalar component** and is authoritative for decoding — it is never multiplexed with a component count |
+| 1 | uint8 | `num_components` (must be 1; reserved, see below) |
+| 1 | uint8 | `component_layout` (must be 0; reserved, see below) |
+| 2 | uint16 | precision bits (per scalar component) |
 | 2 | uint16 | padding bits |
 | 1 | uint8 | compression (0 = none; reserved) |
 | 4 | float32 | `quantization_scale` (reserved, see below) |
@@ -240,6 +242,31 @@ quantization support, with the intended semantics
 float32 scale (default 1.0) and an int32 zero-point in units of the scale
 (default 0).. Both writer and reader enforce the identity
 values (scale = 1, zero_point = 0): a file with anything else is currently rejected with an error. 
+
+### Vector-valued coefficients (reserved)
+
+Each subspace record carries two bytes reserved for vector-valued
+coefficients (e.g. multiwavelet / modal coefficients of a single field):
+`num_components` values are stored per spatial point, arranged as
+declared by `component_layout`:
+
+- **planes (0)**, structure-of-arrays: the blob holds one complete
+  spatial linearization per component, back to back. Favors
+  per-component access and compressibility.
+- **interleaved (1)**, array-of-structures: the components of each point
+  are stored together, points following the linearization order. Favors
+  streaming reconstruction (a reader emits complete vectors as bytes
+  arrive) and in-place modification of a point's vector.
+
+In both layouts the component axis participates in neither the
+hierarchical transform nor the linearization order, and `POINTWISE`
+indices stay spatial (one index selects a whole vector). The value dtype
+and `precision_bits` always describe a single scalar component. 
+Both writer and reader currently enforce
+`num_components == 1` and `component_layout == 0`; a file with anything
+else is rejected with an error. A `.spght` file holds one (possibly
+vector-valued) field — several distinct physical fields are stored as
+separate files.
 
 ### Linearization orders
 

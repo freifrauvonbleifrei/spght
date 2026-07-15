@@ -49,6 +49,12 @@ class Subspace:
     # a custom precision is not (yet) enforced
     precision_bits: int
     data: Tensor | None = None
+    # reserved for future use (multiwavelets, per-subspace p-adaptivity):
+    # number of values stored per spatial point
+    num_components: int = 1
+    # how a multi-component blob is arranged:
+    # 0 = component-major planes (SoA), 1 = interleaved per point (AoS)
+    component_layout: int = 0
     # two quantization parameters, reserved for future use with the
     # semantics logical = scale * (stored - zero_point)
     quantization_scale: float = 1.0
@@ -78,6 +84,15 @@ class Subspace:
             raise ValueError("precision_bits must be positive")
         if self.padding_bits < 0:
             raise ValueError("padding_bits must not be negative")
+        if not 1 <= self.num_components <= 255:
+            raise ValueError(
+                f"num_components must fit in one byte, got {self.num_components}"
+            )
+        if self.component_layout not in (0, 1):
+            raise ValueError(
+                "component_layout must be 0 (planes) or 1 (interleaved), "
+                f"got {self.component_layout}"
+            )
         if self.data is not None and tuple(self.data.shape) != tuple(self.extents):
             raise ValueError(
                 f"data shape {self.data.shape} does not match extents {self.extents}"

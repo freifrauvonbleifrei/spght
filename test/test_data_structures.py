@@ -238,6 +238,17 @@ def test_subspace_holds_tensor():
         Subspace(extents=(4, 2), precision_bits=64, data=dense)  # shape mismatch
 
 
+def test_subspace_validates_num_components():
+    for out_of_byte_range in (0, -1, 256):
+        with pytest.raises(ValueError, match="num_components"):
+            Subspace(extents=(2,), precision_bits=64, num_components=out_of_byte_range)
+    subspace = Subspace(extents=(2,), precision_bits=64)
+    assert subspace.num_components == 1
+    assert subspace.component_layout == 0
+    with pytest.raises(ValueError, match="component_layout"):
+        Subspace(extents=(2,), precision_bits=64, component_layout=2)
+
+
 def test_hierarchize_produces_dense_tensors():
     nodal_values = np.random.default_rng(2).random((4, 8))
     hierarchical_tensors = hierarchize(nodal_values)

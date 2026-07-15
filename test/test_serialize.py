@@ -365,8 +365,9 @@ def test_read_rejects_unknown_order_code():
 def test_read_rejects_reserved_compression_byte():
     corrupted = _valid_file_bytes()
     record, num_dims = _first_record_offset(corrupted)
-    # after order, kind, dtype char, itemsize, precision (2), padding (2)
-    corrupted[record + 4 * num_dims + 8] = 5
+    # after order, kind, dtype char, itemsize, num components,
+    # component layout, precision (2), padding (2)
+    corrupted[record + 4 * num_dims + 10] = 5
     with pytest.raises(ValueError, match="compression"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
 
@@ -536,16 +537,48 @@ def test_write_rejects_reserved_fields():
     )
     with pytest.raises(ValueError, match="compression"):
         tensors.write(io.BytesIO())
+    # same for the reserved num_components byte
+    tensors.subspaces[level] = replace(
+        tensors.subspaces[level], compression=0, num_components=3
+    )
+    with pytest.raises(ValueError, match="num_components"):
+        tensors.write(io.BytesIO())
+    # same for the reserved component layout byte
+    tensors.subspaces[level] = replace(
+        tensors.subspaces[level], num_components=1, component_layout=1
+    )
+    with pytest.raises(ValueError, match="component_layout"):
+        tensors.write(io.BytesIO())
 
 
 def test_read_rejects_nonidentity_quantization_fields():
     corrupted = _valid_file_bytes()
     record, num_dims = _first_record_offset(corrupted)
     # the quantization scale sits after order(1) + kind(1) + dtype char(1)
-    # + itemsize(1) + precision(2) + padding(2) + compression(1) = 9 bytes
-    # of the fixed record part, which is not covered by the blob CRC
-    _struct.pack_into("<f", corrupted, record + 4 * num_dims + 9, 2.0)
+    # + itemsize(1) + num components(1) + component layout(1)
+    # + precision(2) + padding(2) + compression(1) = 11 bytes of the fixed
+    # record part, which is not covered by the blob CRC
+    _struct.pack_into("<f", corrupted, record + 4 * num_dims + 11, 2.0)
     with pytest.raises(ValueError, match="quantization"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_read_rejects_reserved_num_components():
+    corrupted = _valid_file_bytes()
+    record, num_dims = _first_record_offset(corrupted)
+    # num components sits after order(1) + kind(1) + dtype char(1)
+    # + itemsize(1) = 4 bytes of the fixed record part
+    corrupted[record + 4 * num_dims + 4] = 3
+    with pytest.raises(ValueError, match="num_components"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_read_rejects_reserved_component_layout():
+    corrupted = _valid_file_bytes()
+    record, num_dims = _first_record_offset(corrupted)
+    # the component layout byte follows num components
+    corrupted[record + 4 * num_dims + 5] = 1
+    with pytest.raises(ValueError, match="component_layout"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
 
 
