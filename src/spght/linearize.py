@@ -54,6 +54,9 @@ def _build_masks(extent, order):
     rotation once it has been given all the bits it needs.
     """
     bits_needed = [level_from_extent(e) for e in extent]
+    if sum(bits_needed) == 0:
+        # a single-cell block (every extent 1) needs no bits at all
+        return [0] * len(extent)
     remaining = bits_needed[:]
 
     masks = [ba.bitarray(sum(bits_needed)) for _ in range(len(extent))]

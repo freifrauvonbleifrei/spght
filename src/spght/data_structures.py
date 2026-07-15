@@ -6,7 +6,7 @@
 The binary encoding details may still evolve.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import IntEnum
 from pathlib import Path
 from typing import BinaryIO, Sequence, Union
@@ -260,6 +260,15 @@ class SparseGridHierarchicalTensors:
         self._validate_subspace(level, subspace)
         self.subspaces[level] = subspace
         self._sort_subspaces()
+
+    def relinearize(self, order: Order) -> "SparseGridHierarchicalTensors":
+        """Re-linearize every subspace's buffer into `order`, in place. Returns self for chaining."""
+        for level, subspace in self.subspaces.items():
+            if subspace.data is not None and subspace.data.order != order:
+                self.subspaces[level] = replace(
+                    subspace, data=subspace.data.with_order(order)
+                )
+        return self
 
     def write(self, target: "str | Path | BinaryIO") -> None:
         """Write the hierarchy to disk in the spght binary format

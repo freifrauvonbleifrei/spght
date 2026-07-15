@@ -100,6 +100,13 @@ class Tensor(abc.ABC):
         ...
 
     @abc.abstractmethod
+    def with_order(self, order: Order) -> "Tensor":
+        """The same logical array linearized in `order`. Returns self
+        (sharing the buffer) when the order already matches, a rearranged
+        copy otherwise."""
+        ...
+
+    @abc.abstractmethod
     def nonzero_items(self) -> Iterator[tuple[tuple[int, ...], float]]:
         """Yield ((multidim index), value) for stored nonzeros, in ascending
         linear-index order."""
@@ -266,6 +273,17 @@ class DenseTensor(Tensor):
         )
         dense[tuple(coords.T)] = self._flat
         return dense
+
+    def with_order(self, order: Order) -> "DenseTensor":
+        if order == self.order:
+            return self
+        # gather: for each target position, the source position holding
+        # the value of the same multidim coordinate
+        coords = indices_to_multidim_indices(
+            np.arange(self.size), self.shape, order
+        )
+        source = multidim_indices_to_indices(coords, self.shape, self.order)
+        return DenseTensor(self._flat[source], self.shape, order=order)
 
     def nonzero_items(self):
         nz = np.flatnonzero(self._flat)
@@ -468,6 +486,18 @@ class SparseTensor(Tensor):
         coords = indices_to_multidim_indices(self._keys, self.shape, self.order)
         for c, v in zip(coords, self._values):
             yield tuple(int(i) for i in c), v
+
+    def with_order(self, order: Order) -> "SparseTensor":
+        if order == self.order:
+            return self
+        # remap the stored keys only: O(nnz), never materializes the array
+        coords = indices_to_multidim_indices(
+            self.linear_indices, self.shape, self.order
+        )
+        keys = multidim_indices_to_indices(coords, self.shape, order)
+        return SparseTensor.from_linear(
+            keys, self.linear_values.copy(), self.shape, order=order
+        )
 
 
 def make_tensor_from_linear(

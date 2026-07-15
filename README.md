@@ -62,6 +62,9 @@ tensors = spght.hierarchize(nodal_values)
 # drop coefficients with |coefficient| <= epsilon
 compressed = spght.compress(tensors, epsilon=0.01)
 
+# optional: re-linearize the coefficient buffers, e.g. onto Z-order curves
+compressed.relinearize("ZC")
+
 # write to / read from the .spght binary format (path or binary stream);
 # equivalently: compressed.write(...) and spght.SparseGridHierarchicalTensors.read(...)
 spght.write(compressed, "function.spght")
