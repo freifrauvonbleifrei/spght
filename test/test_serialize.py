@@ -364,7 +364,7 @@ def test_read_rejects_reserved_compression_byte():
     corrupted = _valid_file_bytes()
     record, num_dims = _first_record_offset(corrupted)
     # after order, kind, dtype char, itemsize, precision (2), padding (2)
-    corrupted[record + 8 * num_dims + 8] = 5
+    corrupted[record + 4 * num_dims + 8] = 5
     with pytest.raises(ValueError, match="compression"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
 
