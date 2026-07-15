@@ -16,7 +16,7 @@ from spght.interpolate import (
 from spght.hierarchize import hierarchize, dehierarchize
 from spght.linearize import extent_from_level, midpoint_coordinates_from_level
 from spght.tensor import DenseTensor
-from spght.wavelets import cdf_2_2_basis, hat_basis, half_haar, cubic_basis
+from spght.wavelets import cdf_2_2_basis, hat_basis, cubic_basis
 
 
 def test_interpolate_random_level0():
@@ -241,6 +241,9 @@ def test_interpolate_recorded_bases_2d_at_nodes():
 
 
 def test_interpolate_default_matches_explicit_haar():
+    pytest.importorskip("pywt")
+    from spght.wavelets import half_haar
+
     rng = np.random.default_rng(21)
     tensors = hierarchize(rng.random((8, 8)))
     coordinates = rng.random((32, 2))

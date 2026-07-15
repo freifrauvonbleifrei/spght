@@ -31,7 +31,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest pytest-cov
       - name: Install spght module
-        run: pip install -e .
+        run: pip install -e ".[pywt]"
       - name: Test with pytest, to create cov report
         continue-on-error: true # we want to get the coverage report even if tests fail
         run: |

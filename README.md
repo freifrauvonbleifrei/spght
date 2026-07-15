@@ -37,6 +37,12 @@ cd spght
 pip install -e .
 ```
 
+spght depends only on `numpy` and `bitarray`. The optional `[pywt]` extra
+(`pip install -e ".[pywt]"`) adds the PyWavelets bridge in
+`spght.pywt_compat`, which shows how the half-normalized Haar transform
+maps onto the classical filter-bank machinery; without it, everything
+except that bridge works identically.
+
 Run the tests with `pip install pytest && pytest test/`.
 
 ## Usage
