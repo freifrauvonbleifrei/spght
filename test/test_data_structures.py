@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 
 from spght.data_structures import (
+    Convention,
+    NumberFormat,
     SparseGridHierarchicalTensors,
     Subspace,
     TensorKind,
@@ -247,6 +249,66 @@ def test_subspace_validates_num_components():
     assert subspace.component_layout == 0
     with pytest.raises(ValueError, match="component_layout"):
         Subspace(extents=(2,), precision_bits=64, component_layout=2)
+
+
+def test_number_format_byte_roundtrip():
+    named_formats = [
+        NumberFormat(exponent_bits=11),  # float64
+        NumberFormat(exponent_bits=8),  # float32 / bfloat16 / tf32
+        NumberFormat(exponent_bits=5),  # float16 / fp8 E5M2
+        NumberFormat(exponent_bits=4, convention=Convention.FN),  # fp8 E4M3FN
+        NumberFormat(exponent_bits=5, convention=Convention.FNUZ),
+        NumberFormat(exponent_bits=2),  # fp4 E2M1
+        NumberFormat(exponent_bits=8, unsigned=True, convention=Convention.FN),
+        NumberFormat(),  # signed integer
+        NumberFormat(unsigned=True),  # unsigned integer
+        NumberFormat(convention=Convention.OTHER),
+    ]
+    seen_bytes = set()
+    for number_format in named_formats:
+        byte = number_format.to_byte()
+        assert 0 <= byte <= 255
+        assert NumberFormat.from_byte(byte) == number_format
+        seen_bytes.add(byte)
+    assert len(seen_bytes) == len(named_formats)  # encoding is injective
+
+
+def test_number_format_from_dtype():
+    assert NumberFormat.from_dtype(np.float64) == NumberFormat(exponent_bits=11)
+    assert NumberFormat.from_dtype(np.float32) == NumberFormat(exponent_bits=8)
+    assert NumberFormat.from_dtype(np.float16) == NumberFormat(exponent_bits=5)
+    assert NumberFormat.from_dtype(np.int8) == NumberFormat()
+    assert NumberFormat.from_dtype(np.uint16) == NumberFormat(unsigned=True)
+
+
+def test_number_format_validation():
+    with pytest.raises(ValueError, match="exponent_bits"):
+        NumberFormat(exponent_bits=32)  # does not fit the 5-bit field
+    with pytest.raises(ValueError, match="FN"):
+        NumberFormat(convention=Convention.FN)  # floats need an exponent
+    with pytest.raises(ValueError, match="OTHER"):
+        NumberFormat(exponent_bits=4, convention=Convention.OTHER)
+    with pytest.raises(ValueError, match="OTHER"):
+        NumberFormat(unsigned=True, convention=Convention.OTHER)
+
+
+def test_subspace_number_format():
+    # derived from the data dtype when not given
+    data = DenseTensor.from_dense(np.zeros((2,), dtype=np.float32))
+    subspace = Subspace(extents=(2,), precision_bits=32, data=data)
+    assert subspace.number_format == NumberFormat(exponent_bits=8)
+    # without data: float64's flavor
+    assert Subspace(extents=(2,), precision_bits=64).number_format == (
+        NumberFormat(exponent_bits=11)
+    )
+    # sign + exponent bits must fit in precision_bits: float64's flavor
+    # needs 12 of them
+    with pytest.raises(ValueError, match="precision_bits is 8"):
+        Subspace(
+            extents=(2,),
+            precision_bits=8,
+            number_format=NumberFormat(exponent_bits=11),
+        )
 
 
 def test_hierarchize_produces_dense_tensors():

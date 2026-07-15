@@ -93,8 +93,20 @@ Subspace record:
                            interleaved=1 (AoS, the components of each
                            point stored together, points in linearization
                            order).
-    precision bits         uint16; per scalar component
-    padding bits           uint16
+    precision bits         uint8, 1 to 8 * dtype itemsize: total bits of
+                           the stored scalars' number format
+    number format          uint8, the format's flavor: bits 0-4 exponent
+                           width e (0 = integer), bit 5 unsigned flag,
+                           bits 6-7 special-value convention (IEEE=0,
+                           FN=1, FNUZ=2, OTHER=3). The bias is
+                           implied by the convention (IEEE/FN:
+                           2^(e-1)-1, FNUZ: 2^(e-1)). The container
+                           dtype holds the exact widened values, so
+                           readers decode correctly without interpreting
+                           this byte
+    padding bits           uint16; trailing slack bits, meaningful only
+                           under a future bit-packing transform
+                           (carried verbatim until then)
     compression            uint8
     quantization_scale     float32; reserved, with the future semantics
     quantization_zero_pt   int32     logical = scale * (stored - zero_point)
@@ -130,6 +142,7 @@ from spght.basis import (
 )
 from spght.data_structures import (
     MetadataValue,
+    NumberFormat,
     OpaqueValue,
     SparseGridHierarchicalTensors,
     Subspace,
@@ -147,7 +160,7 @@ _CODE_TO_ORDER: dict[int, Order] = {c: o for o, c in _ORDER_TO_CODE.items()}
 
 _HEADER = struct.Struct("<33sBBHQ")  # magic, major, minor, ndim, num subspaces
 _HEADER_CRC = struct.Struct("<I")  # closes the header, covers all bytes before it
-_RECORD = struct.Struct("<BBcBBBHHBfiQQ")  # see subspace record layout above
+_RECORD = struct.Struct("<BBcBBBBBHBfiQQ")  # see subspace record layout above
 _RECORD_CRC = struct.Struct("<I")  # follows each record's data blob
 
 
@@ -550,6 +563,14 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
                 keys.astype(_index_dtype(data.size)).tobytes()
                 + values.astype(little_endian, copy=False).tobytes()
             )
+    if not 1 <= subspace.precision_bits <= 8 * value_dtype.itemsize:
+        raise ValueError(
+            f"precision_bits must be in [1, {8 * value_dtype.itemsize}] for "
+            f"dtype {value_dtype}, got {subspace.precision_bits} (the "
+            "container dtype must be wide enough for the stored format)"
+        )
+    number_format = subspace.number_format
+    assert number_format is not None  # normalized in Subspace.__post_init__
     fixed = _RECORD.pack(
         _ORDER_TO_CODE[subspace.order],
         int(kind),
@@ -558,6 +579,7 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
         subspace.num_components,
         subspace.component_layout,
         subspace.precision_bits,
+        number_format.to_byte(),
         subspace.padding_bits,
         subspace.compression,
         subspace.quantization_scale,
@@ -579,6 +601,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         num_components,
         component_layout,
         precision_bits,
+        number_format_byte,
         padding_bits,
         compression,
         quantization_scale,
@@ -618,6 +641,20 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         raise ValueError(
             f"Invalid value dtype {dtype_kind!r} with itemsize {itemsize}"
         ) from error
+    if not 1 <= precision_bits <= 8 * itemsize:
+        raise ValueError(
+            f"precision_bits must be in [1, {8 * itemsize}] for "
+            f"dtype {value_dtype}, got {precision_bits}"
+        )
+    # raises ValueError for structurally invalid flavor bytes
+    number_format = NumberFormat.from_byte(number_format_byte)
+    if (0 if number_format.unsigned else 1) + number_format.exponent_bits > (
+        precision_bits
+    ):
+        raise ValueError(
+            f"Number format {number_format} does not fit in "
+            f"{precision_bits} precision bits"
+        )
 
     if kind == TensorKind.EMPTY:
         if num_stored != 0:
@@ -662,6 +699,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         extents=shape,
         precision_bits=precision_bits,
         data=data,
+        number_format=number_format,
         num_components=num_components,
         component_layout=component_layout,
         quantization_scale=quantization_scale,

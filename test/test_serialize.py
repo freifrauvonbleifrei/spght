@@ -13,6 +13,8 @@ import zlib as _zlib
 from spght.basis import Dirichlet, Neumann
 from spght.compress import compress
 from spght.data_structures import (
+    Convention,
+    NumberFormat,
     SparseGridHierarchicalTensors,
     Subspace,
     TensorKind,
@@ -38,6 +40,7 @@ def _assert_equal_containers(
         actual_subspace = actual.subspaces[level]
         assert actual_subspace.extents == tuple(expected_subspace.extents)
         assert actual_subspace.precision_bits == expected_subspace.precision_bits
+        assert actual_subspace.number_format == expected_subspace.number_format
         assert actual_subspace.padding_bits == expected_subspace.padding_bits
         assert actual_subspace.compression == expected_subspace.compression
         assert (
@@ -580,6 +583,87 @@ def test_read_rejects_reserved_component_layout():
     corrupted[record + 4 * num_dims + 5] = 1
     with pytest.raises(ValueError, match="component_layout"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_read_rejects_precision_beyond_dtype():
+    corrupted = _valid_file_bytes()
+    record, num_dims = _first_record_offset(corrupted)
+    # the precision_bits byte follows order(1) + kind(1) + dtype char(1)
+    # + itemsize(1) + num components(1) + component layout(1) = 6 bytes;
+    # a 128-bit format cannot sit in a 64-bit container
+    corrupted[record + 4 * num_dims + 6] = 128
+    with pytest.raises(ValueError, match="precision_bits"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_read_rejects_invalid_number_format():
+    corrupted = _valid_file_bytes()
+    record, num_dims = _first_record_offset(corrupted)
+    # the number format byte follows precision_bits; 0b11000001 claims the
+    # OTHER convention (bits 6-7) with a nonzero exponent width -- OTHER
+    # must be stored canonically
+    corrupted[record + 4 * num_dims + 7] = 0b11000001
+    with pytest.raises(ValueError, match="OTHER"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+    # exponent width larger than the format itself: 31 exponent bits plus
+    # a sign bit cannot fit an 8-bit format
+    corrupted = _valid_file_bytes()
+    record, num_dims = _first_record_offset(corrupted)
+    corrupted[record + 4 * num_dims + 6] = 8
+    corrupted[record + 4 * num_dims + 7] = 0b00011111
+    with pytest.raises(ValueError, match="[Nn]umber format"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_write_rejects_precision_beyond_dtype():
+    data = DenseTensor.from_dense(np.zeros((2,), dtype=np.float32))
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(1,),
+        subspaces={(1,): Subspace(extents=(2,), precision_bits=64, data=data)},
+    )
+    with pytest.raises(ValueError, match="precision_bits"):
+        tensors.write(io.BytesIO())
+
+
+def test_roundtrip_narrow_number_formats():
+    # bfloat16 coefficients widened losslessly into their float32
+    # container: float32's flavor (8 exponent bits, IEEE) at 16 bits
+    values = np.random.default_rng(41).random((4,)).astype(np.float32)
+    values = (values.view(np.uint32) & 0xFFFF0000).view(np.float32)
+    bfloat16 = NumberFormat(exponent_bits=8)
+    # fp8 E4M3FN coefficients widened losslessly into float16
+    fp8_values = np.array([0.5, -1.75, 448.0, 0.0], dtype=np.float16)
+    e4m3fn = NumberFormat(exponent_bits=4, convention=Convention.FN)
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(3,),
+        subspaces={
+            (2,): Subspace(
+                extents=(4,),
+                precision_bits=16,
+                data=DenseTensor.from_dense(values),
+                number_format=bfloat16,
+            ),
+            (3,): Subspace(
+                extents=(4,),
+                precision_bits=8,
+                data=DenseTensor.from_dense(fp8_values),
+                number_format=e4m3fn,
+            ),
+        },
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    read_back = SparseGridHierarchicalTensors.read(buffer)
+    assert read_back.subspaces[(2,)].precision_bits == 16
+    assert read_back.subspaces[(2,)].number_format == bfloat16
+    assert read_back.subspaces[(2,)].data.dtype == np.float32
+    assert np.array_equal(read_back.subspaces[(2,)].data, values)
+    assert read_back.subspaces[(3,)].precision_bits == 8
+    assert read_back.subspaces[(3,)].number_format == e4m3fn
+    assert np.array_equal(read_back.subspaces[(3,)].data, fp8_values)
 
 
 def test_write_rejects_extents_beyond_uint32():
