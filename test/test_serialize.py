@@ -43,7 +43,8 @@ def _assert_equal_containers(
             actual_subspace.quantization_scale == expected_subspace.quantization_scale
         )
         assert (
-            actual_subspace.quantization_offset == expected_subspace.quantization_offset
+            actual_subspace.quantization_zero_point
+            == expected_subspace.quantization_zero_point
         )
         assert actual_subspace.order == expected_subspace.order
         if expected_subspace.data is None:
@@ -354,7 +355,7 @@ def _first_record_offset(raw: bytes) -> tuple[int, int]:
 def test_read_rejects_unknown_order_code():
     corrupted = _valid_file_bytes()
     record, num_dims = _first_record_offset(corrupted)
-    corrupted[record + 8 * num_dims] = 9  # order code, outside the record CRC
+    corrupted[record + 4 * num_dims] = 9  # order code, outside the record CRC
     with pytest.raises(ValueError, match="order code"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
 
@@ -410,6 +411,15 @@ def test_read_rejects_nonidentity_quantization_fields():
     # the quantization scale sits after order(1) + kind(1) + dtype char(1)
     # + itemsize(1) + precision(2) + padding(2) + compression(1) = 9 bytes
     # of the fixed record part, which is not covered by the blob CRC
-    _struct.pack_into("<d", corrupted, record + 8 * num_dims + 9, 2.0)
+    _struct.pack_into("<f", corrupted, record + 4 * num_dims + 9, 2.0)
     with pytest.raises(ValueError, match="quantization"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_write_rejects_extents_beyond_uint32():
+    oversized = Subspace(extents=(2**33, 16), precision_bits=64)  # EMPTY data
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=2, max_level=(1, 1), subspaces={(1, 1): oversized}
+    )
+    with pytest.raises(ValueError, match="uint32"):
+        tensors.write(io.BytesIO())

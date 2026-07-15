@@ -26,9 +26,10 @@ class Subspace:
     # a custom precision is not (yet) enforced
     precision_bits: int
     data: Tensor | None = None
-    # two quantization parameters, reserved for future use
+    # two quantization parameters, reserved for future use with the
+    # semantics logical = scale * (stored - zero_point)
     quantization_scale: float = 1.0
-    quantization_offset: float = 0.0
+    quantization_zero_point: int = 0
     padding_bits: int = 0
     compression: int = 0
 

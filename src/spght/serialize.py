@@ -54,15 +54,15 @@ The subspace table makes each record independently addressable.
 Ordering the subspaces makes the format "scalable" in the JPEG2000 sense.
 
 Subspace record:
-    extents                uint64 per dimension
+    extents                uint32 per dimension
     order code             uint8: C=0, F=1, ZC=2, ZF=3
     tensor kind            uint8, TensorKind value
     value dtype            numpy kind char (1 byte) + itemsize (uint8)
     precision bits         uint16
     padding bits           uint16
     compression            uint8
-    quantization_scale     float64
-    quantization_offset    float64
+    quantization_scale     float32; reserved, with the future semantics
+    quantization_zero_pt   int32     logical = scale * (stored - zero_point)
     num stored entries     uint64
     num data bytes         uint64
     checksum               uint32, crc32 of the data blob (verified on read)
@@ -109,7 +109,7 @@ _CODE_TO_ORDER: dict[int, Order] = {c: o for o, c in _ORDER_TO_CODE.items()}
 
 _HEADER = struct.Struct("<33sBBHQ")  # magic, major, minor, ndim, num subspaces
 _HEADER_CRC = struct.Struct("<I")  # closes the header, covers all bytes before it
-_RECORD = struct.Struct("<BBcBHHBddQQI")  # see subspace record layout above
+_RECORD = struct.Struct("<BBcBHHBfiQQI")  # see subspace record layout above
 
 
 _BC = struct.Struct("<Bd")  # boundary rule code + Dirichlet wall value
@@ -308,12 +308,17 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
         raise ValueError(
             f"Reserved compression byte must be 0, got {subspace.compression}"
         )
-    if subspace.quantization_scale != 1.0 or subspace.quantization_offset != 0.0:
+    if subspace.quantization_scale != 1.0 or subspace.quantization_zero_point != 0:
         raise ValueError(
             "The quantization fields are reserved: only identity "
-            "(scale=1, offset=0) can be serialized"
+            "(scale=1, zero_point=0) can be serialized"
         )
-    extents = struct.pack(f"<{num_dims}Q", *subspace.extents)
+    if any(not 0 <= extent <= 0xFFFFFFFF for extent in subspace.extents):
+        raise ValueError(
+            f"Extents must fit in uint32 each, got {subspace.extents} "
+            "(this caps levels at 31 per dimension)"
+        )
+    extents = struct.pack(f"<{num_dims}I", *subspace.extents)
     data = subspace.data
     if data is None:
         kind = TensorKind.EMPTY
@@ -356,7 +361,7 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
         subspace.padding_bits,
         subspace.compression,
         subspace.quantization_scale,
-        subspace.quantization_offset,
+        subspace.quantization_zero_point,
         num_stored,
         len(blob),
         zlib.crc32(blob),
@@ -365,7 +370,7 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
 
 
 def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
-    extents = struct.unpack(f"<{num_dims}Q", _read_exactly(stream, 8 * num_dims))
+    extents = struct.unpack(f"<{num_dims}I", _read_exactly(stream, 4 * num_dims))
     (
         order_code,
         kind_code,
@@ -375,7 +380,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         padding_bits,
         compression,
         quantization_scale,
-        quantization_offset,
+        quantization_zero_point,
         num_stored,
         num_blob_bytes,
         checksum,
@@ -390,10 +395,11 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
     kind = TensorKind(kind_code)  # raises ValueError for unknown codes
     if compression != 0:
         raise ValueError(f"Reserved compression byte must be 0, got {compression}")
-    if quantization_scale != 1.0 or quantization_offset != 0.0:
+    if quantization_scale != 1.0 or quantization_zero_point != 0:
         raise ValueError(
-            "Reserved quantization fields must be identity (scale=1, offset=0), "
-            f"got scale={quantization_scale}, offset={quantization_offset}"
+            "Reserved quantization fields must be identity "
+            f"(scale=1, zero_point=0), got scale={quantization_scale}, "
+            f"zero_point={quantization_zero_point}"
         )
     shape = tuple(int(e) for e in extents)
     total = math.prod(shape) if shape else 1  # Python ints: no int64 overflow
@@ -447,7 +453,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         precision_bits=precision_bits,
         data=data,
         quantization_scale=quantization_scale,
-        quantization_offset=quantization_offset,
+        quantization_zero_point=quantization_zero_point,
         padding_bits=padding_bits,
         compression=compression,
     )

@@ -174,7 +174,7 @@ def test_interpolate_ignores_reserved_quantization_fields():
                 precision_bits=64,
                 data=DenseTensor.from_dense(np.array([[30.0]])),
                 quantization_scale=0.1,
-                quantization_offset=-1.0,
+                quantization_zero_point=-1,
             )
         },
     )
