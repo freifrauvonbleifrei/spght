@@ -259,10 +259,46 @@ def test_interval_get_set_semantics():
     assert t[2, 0] == -1.0
     t[3] = 0.0  # zero write inside a run keeps the run structure
     assert t.num_runs == 2 and t.nnz == 5
-    with pytest.raises(NotImplementedError, match="runs"):
-        t[5] = 1.0  # cannot insert outside the covered set
     with pytest.raises(IndexError):
         t[16]
+
+
+def test_interval_insert_outside_runs():
+    t = IntervalTensor(
+        firsts=[2, 8], lasts=[4, 9], values=np.arange(5.0), shape=(4, 4), order="C"
+    )
+    t[6] = 6.0  # a new isolated point, pending until the next merge
+    assert t[6] == 6.0  # readable before the merge
+    assert t.nnz == 6
+    t[6] = 7.0  # last write wins in the pending buffer, too
+    assert t[6] == 7.0 and t.nnz == 6
+    t[12] = 0.0  # zero write outside the runs is a no-op
+    assert t.nnz == 6 and t[12] == 0.0
+    # bridging writes make the runs coalesce on merge: 2..4 + 5..7 + 8..9
+    t[np.array([5, 7])] = np.array([5.0, 8.0])
+    assert np.array_equal(t.linear_indices, np.arange(2, 10))  # merges
+    assert t.num_runs == 1
+    assert t[np.arange(2, 10)].tolist() == [0.0, 1.0, 2.0, 5.0, 7.0, 8.0, 3.0, 4.0]
+    dense = t.to_dense()
+    assert dense[1, 2] == 7.0  # linear 6 in C order
+    assert np.count_nonzero(dense) == 7  # value at linear 2 is 0.0
+
+
+def test_interval_insert_into_empty_and_merge_limit():
+    t = IntervalTensor.from_dense(np.zeros((8, 8)), order="C", pending_limit=4)
+    for i in range(6):  # crosses the merge threshold
+        t[np.int64(i)] = float(i + 1)
+    assert t.num_runs == 1
+    assert t.nnz == 6
+    assert np.array_equal(t.linear_values, np.arange(1.0, 7.0))
+
+
+def test_interval_insert_seen_by_order_and_items():
+    t = IntervalTensor.from_dense(np.zeros((4, 4)), order="C")
+    t[np.array([1, 2])] = np.array([1.0, 2.0])
+    assert list(t.nonzero_items()) == [((0, 1), 1.0), ((0, 2), 2.0)]
+    relinearized = t.with_order("ZC")
+    assert relinearized[0, 1] == 1.0 and relinearized[0, 2] == 2.0
 
 
 def test_interval_validation():

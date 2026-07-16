@@ -520,9 +520,11 @@ class IntervalTensor(Tensor):
     representation is canonical). Every covered position stores a value,
     every other position is implicitly zero.
 
-    The runs are structural: values inside runs can be updated (including
-    to zero, which keeps the run), but writing outside the covered set is
-    not supported -- convert to a SparseTensor for that."""
+    Values inside runs are updated in place (including to zero, which
+    keeps the run). Writes outside the covered set are collected in a
+    pending buffer and merged into restructured, again-maximal runs once
+    it grows past `pending_limit` -- so inserting is amortized like in
+    SparseTensor. Writing zero outside the runs is a no-op."""
 
     kind = TensorKind.INTERVALS
 
@@ -533,6 +535,7 @@ class IntervalTensor(Tensor):
         values: npt.NDArray,
         shape: tuple[int, ...],
         order: Order = "C",
+        pending_limit: int = 1024,
     ):
         firsts = np.asarray(firsts, dtype=np.int64)
         lasts = np.asarray(lasts, dtype=np.int64)
@@ -568,6 +571,8 @@ class IntervalTensor(Tensor):
         self._values = values
         # position of each run's first value in the value buffer
         self._offsets = np.concatenate(([0], np.cumsum(lengths)))
+        self._pending_limit = pending_limit
+        self._pending: dict[int, float] = {}
 
     @classmethod
     def from_linear(
@@ -576,6 +581,7 @@ class IntervalTensor(Tensor):
         values: npt.NDArray,
         shape: tuple[int, ...],
         order: Order = "C",
+        pending_limit: int = 1024,
     ) -> "IntervalTensor":
         """Construct from unique linear indices (need not be sorted);
         consecutive indices coalesce into runs."""
@@ -591,31 +597,41 @@ class IntervalTensor(Tensor):
         if np.any(keys[1:] == keys[:-1]):
             raise ValueError("Linear keys must be unique")
         firsts, lasts = runs_from_sorted_keys(keys)
-        return cls(firsts, lasts, values, shape, order=order)
+        return cls(firsts, lasts, values, shape, order=order, pending_limit=pending_limit)
 
     @classmethod
-    def from_dense(cls, array: npt.NDArray, order: Order = "C") -> "IntervalTensor":
+    def from_dense(
+        cls, array: npt.NDArray, order: Order = "C", pending_limit: int = 1024
+    ) -> "IntervalTensor":
         """Linearize an n-d array and keep runs of its nonzero entries."""
         flat = DenseTensor.from_dense(array, order=order).linear_values
         keys = np.flatnonzero(flat)
-        return cls.from_linear(keys, flat[keys], np.asarray(array).shape, order)
+        return cls.from_linear(
+            keys, flat[keys], np.asarray(array).shape, order, pending_limit
+        )
 
     @property
     def num_runs(self) -> int:
+        self._merge_pending()
         return int(self._firsts.size)
 
     @property
     def nnz(self) -> int:
         """Number of stored (covered) entries."""
-        return int(self._values.size)
+        return int(self._values.size) + len(self._pending)
 
     @property
     def linear_values(self) -> npt.NDArray:
+        self._merge_pending()
         return self._values
 
     @property
     def linear_indices(self) -> npt.NDArray[np.int64]:
         """The covered positions, expanded from the runs (sorted)."""
+        self._merge_pending()
+        return self._expanded_keys()
+
+    def _expanded_keys(self) -> npt.NDArray[np.int64]:
         if self._firsts.size == 0:
             return np.empty(0, dtype=np.int64)
         lengths = self._lasts - self._firsts + 1
@@ -625,8 +641,31 @@ class IntervalTensor(Tensor):
             self._firsts - self._offsets[:-1], lengths
         )
 
+    def _merge_pending(self) -> None:
+        """Rebuild the runs to absorb the pending out-of-run writes."""
+        if not self._pending:
+            return
+        new_keys = np.fromiter(
+            self._pending.keys(), dtype=np.int64, count=len(self._pending)
+        )
+        new_values = np.fromiter(
+            self._pending.values(), dtype=self._values.dtype, count=len(self._pending)
+        )
+        # pending keys were outside every run when written, so the union
+        # stays unique
+        keys = np.concatenate([self._expanded_keys(), new_keys])
+        values = np.concatenate([self._values, new_values])
+        self._pending.clear()
+        sort_order = np.argsort(keys)
+        keys, values = keys[sort_order], values[sort_order]
+        self._firsts, self._lasts = runs_from_sorted_keys(keys)
+        self._values = values
+        lengths = self._lasts - self._firsts + 1
+        self._offsets = np.concatenate(([0], np.cumsum(lengths)))
+
     @property
     def nbytes(self) -> int:
+        self._merge_pending()
         return int(self._values.nbytes + self._firsts.nbytes + self._lasts.nbytes)
 
     def _run_positions(self, linear: npt.NDArray[np.int64]):
@@ -644,27 +683,40 @@ class IntervalTensor(Tensor):
         positions, covered = self._run_positions(linear)
         result = np.zeros(linear.shape[0], dtype=self.dtype)
         result[covered] = self._values[positions[covered]]
+        if self._pending:  # bounded by pending_limit, so this loop is cheap
+            for i in np.flatnonzero(~covered):
+                pending_value = self._pending.get(int(linear[i]))
+                if pending_value is not None:
+                    result[i] = pending_value
         return result
 
     def _set_linear(self, linear: npt.NDArray[np.int64], values: npt.NDArray) -> None:
         positions, covered = self._run_positions(linear)
+        # in-run writes update in place (duplicate indices: last one wins)
+        self._values[positions[covered]] = values[covered]
         if not np.all(covered):
-            raise NotImplementedError(
-                "IntervalTensor only supports writes inside its stored runs"
-            )
-        self._values[positions] = values
+            # out-of-run writes are buffered until the next merge; writing
+            # zero outside the runs is a no-op
+            for key, value in zip(linear[~covered], values[~covered]):
+                if value != 0:
+                    self._pending[int(key)] = value
+                else:
+                    self._pending.pop(int(key), None)
+            if len(self._pending) >= self._pending_limit:
+                self._merge_pending()
 
     def to_dense(self) -> npt.NDArray:
+        self._merge_pending()
         dense = np.zeros(self.shape, dtype=self.dtype)
         if self._values.size:
             coords = indices_to_multidim_indices(
-                self.linear_indices, self.shape, self.order
+                self._expanded_keys(), self.shape, self.order
             )
             dense[tuple(coords.T)] = self._values
         return dense
 
     def nonzero_items(self):
-        keys = self.linear_indices
+        keys = self.linear_indices  # merges pending
         nonzero = np.flatnonzero(self._values)
         coords = indices_to_multidim_indices(keys[nonzero], self.shape, self.order)
         for c, v in zip(coords, self._values[nonzero]):
@@ -674,7 +726,7 @@ class IntervalTensor(Tensor):
         if order == self.order:
             return self
         coords = indices_to_multidim_indices(
-            self.linear_indices, self.shape, self.order
+            self.linear_indices, self.shape, self.order  # merges pending
         )
         keys = multidim_indices_to_indices(coords, self.shape, order)
         # from_linear re-derives the runs of the new linearization

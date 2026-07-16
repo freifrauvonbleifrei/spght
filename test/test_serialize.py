@@ -715,7 +715,7 @@ def test_roundtrip_intervals_kind():
     assert subspace.data.num_runs == 1
     raw = bytearray(buffer.getvalue())
     record, num_dims = _first_record_offset(raw)
-    (num_blob,) = _struct.unpack_from("<Q", raw, record + 4 * num_dims + 25)
+    (num_blob,) = _struct.unpack_from("<Q", raw, record + 4 * num_dims + 27)
     assert num_blob == 2 * 1 + 40 * 8  # two uint8 bounds + 40 float64 values
 
 
@@ -758,7 +758,7 @@ def test_read_rejects_inconsistent_interval_sizes():
     corrupted = _interval_file_bytes()
     record, num_dims = _interval_record_fixed(corrupted)
     # num data bytes is the last uint64 of the fixed record part
-    num_blob_offset = record + 4 * num_dims + 25
+    num_blob_offset = record + 4 * num_dims + 27
     (num_blob,) = _struct.unpack_from("<Q", corrupted, num_blob_offset)
     _struct.pack_into("<Q", corrupted, num_blob_offset, num_blob + 1)
     with pytest.raises(ValueError, match="inconsistent size"):
@@ -766,7 +766,7 @@ def test_read_rejects_inconsistent_interval_sizes():
     # more runs than stored entries is inconsistent, too
     corrupted = _interval_file_bytes()
     record, num_dims = _interval_record_fixed(corrupted)
-    _struct.pack_into("<Q", corrupted, record + 4 * num_dims + 17, 0)  # num stored
+    _struct.pack_into("<Q", corrupted, record + 4 * num_dims + 19, 0)  # num stored
     with pytest.raises(ValueError, match="run count|inconsistent"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
 
@@ -792,8 +792,8 @@ def test_read_rejects_overlapping_interval_runs():
     tensors.write(buffer)
     corrupted = bytearray(buffer.getvalue())
     record, num_dims = _interval_record_fixed(corrupted)
-    (num_blob,) = _struct.unpack_from("<Q", corrupted, record + 4 * num_dims + 25)
-    blob_offset = record + 4 * num_dims + 33
+    (num_blob,) = _struct.unpack_from("<Q", corrupted, record + 4 * num_dims + 27)
+    blob_offset = record + 4 * num_dims + 35
     assert corrupted[blob_offset : blob_offset + 4] == bytes([0, 16, 7, 23])
     corrupted[blob_offset + 1] = 4  # second run now starts inside the first
     blob = bytes(corrupted[blob_offset : blob_offset + num_blob])
