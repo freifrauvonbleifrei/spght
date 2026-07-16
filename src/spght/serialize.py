@@ -93,20 +93,26 @@ Subspace record:
                            interleaved=1 (AoS, the components of each
                            point stored together, points in linearization
                            order).
-    precision bits         uint8, 1 to 8 * dtype itemsize: total bits of
-                           the stored scalars' number format
+    precision bits         uint8: the exact number of bits each stored
+                           value occupies in the packed value stream --
+                           the blob after the compression codec (see the
+                           compression byte) is undone; while compression
+                           is 0 the two coincide. 
     number format          uint8, the format's flavor: bits 0-4 exponent
                            width e (0 = integer), bit 5 unsigned flag,
                            bits 6-7 special-value convention (IEEE=0,
                            FN=1, FNUZ=2, OTHER=3). The bias is
                            implied by the convention (IEEE/FN:
-                           2^(e-1)-1, FNUZ: 2^(e-1)). The container
-                           dtype holds the exact widened values, so
-                           readers decode correctly without interpreting
-                           this byte
-    padding bits           uint16; trailing slack bits, meaningful only
-                           under a future bit-packing transform
-                           (carried verbatim until then)
+                           2^(e-1)-1, FNUZ: 2^(e-1)); the mantissa width
+                           is precision - sign - e. OTHER formats are not
+                           parametrically widenable and must keep
+                           precision == container width even once packing
+                           exists
+    padding bits           uint16; trailing slack bits closing the final
+                           byte of the (uncompressed) packed value
+                           stream, meaningful only under the future
+                           bit-packing codec (carried verbatim until
+                           then)
     compression            uint8
     quantization_scale     float32; reserved, with the future semantics
     quantization_zero_pt   int32     logical = scale * (stored - zero_point)
@@ -527,38 +533,38 @@ def _stored_entries(data: Tensor) -> "tuple[np.ndarray, np.ndarray]":
 
 
 def _bridged_runs(
-    keys: "np.ndarray", index_itemsize: int, value_itemsize: int
+    keys: "np.ndarray", index_bits: int, value_bits: int
 ) -> "tuple[np.ndarray, np.ndarray]":
     """Runs of the given nonzero positions, with short zero gaps bridged:
-    storing a gap's zeros explicitly costs gap * value_itemsize bytes,
-    splitting costs one extra pair of run bounds -- so gaps of up to
-    2 * index_itemsize / value_itemsize zeros are cheaper (or equal, with
-    fewer runs) inside a run. Once values are stored bit-packed, their
-    per-entry cost shrinks to precision_bits / 8, admitting even longer
-    bridges in this same inequality."""
+    storing a gap's zeros explicitly costs gap * value_bits, splitting
+    costs one extra pair of run bounds (2 * index_bits) -- so gaps of up
+    to 2 * index_bits / value_bits zeros are cheaper (or equal, with fewer
+    runs) inside a run. Values are costed at precision_bits each -- their
+    exact stored width -- so the choice minimizes the actual blob size."""
     firsts, lasts = runs_from_sorted_keys(keys)
     if firsts.size <= 1:
         return firsts, lasts
     gaps = firsts[1:] - lasts[:-1] - 1
-    split_after = np.flatnonzero(gaps * value_itemsize > 2 * index_itemsize)
+    split_after = np.flatnonzero(gaps * value_bits > 2 * index_bits)
     merged_firsts = firsts[np.concatenate(([0], split_after + 1))]
     merged_lasts = lasts[np.concatenate((split_after, [lasts.size - 1]))]
     return merged_firsts, merged_lasts
 
 
 def _cheapest_kind(
-    size: int, itemsize: int, num_nonzero: int, num_runs: int, num_covered: int
+    size: int, value_bits: int, num_nonzero: int, num_runs: int, num_covered: int
 ) -> TensorKind:
-    """The on-disk kind with the smallest data blob; ties go to the
-    simpler kind (FULL, then POINTWISE, then INTERVALS)."""
-    index_itemsize = _index_dtype(size).itemsize
+    """The on-disk kind with the smallest data blob: indices cost their
+    dtype width, values their exact stored width (precision_bits). Ties
+    go to the simpler kind (FULL, then POINTWISE, then INTERVALS)."""
+    index_bits = 8 * _index_dtype(size).itemsize
     kind = TensorKind.FULL
-    cheapest = size * itemsize
-    sparse_bytes = num_nonzero * (index_itemsize + itemsize)
-    if sparse_bytes < cheapest:
-        kind, cheapest = TensorKind.POINTWISE, sparse_bytes
-    interval_bytes = 2 * num_runs * index_itemsize + num_covered * itemsize
-    if interval_bytes < cheapest:
+    cheapest = size * value_bits
+    sparse_bits = num_nonzero * (index_bits + value_bits)
+    if sparse_bits < cheapest:
+        kind, cheapest = TensorKind.POINTWISE, sparse_bits
+    interval_bits = 2 * num_runs * index_bits + num_covered * value_bits
+    if interval_bits < cheapest:
         kind = TensorKind.INTERVALS
     return kind
 
@@ -604,11 +610,15 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
         keys, values = _stored_entries(data)
         index_dtype = _index_dtype(data.size)
         run_firsts, run_lasts = _bridged_runs(
-            keys, index_dtype.itemsize, value_dtype.itemsize
+            keys, 8 * index_dtype.itemsize, subspace.precision_bits
         )
         num_covered = int((run_lasts - run_firsts + 1).sum())
         kind = _cheapest_kind(
-            data.size, value_dtype.itemsize, len(values), len(run_firsts), num_covered
+            data.size,
+            subspace.precision_bits,
+            len(values),
+            len(run_firsts),
+            num_covered,
         )
         if kind == TensorKind.FULL:
             if data.is_sparse:
@@ -636,11 +646,12 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
                 + run_lasts.astype(index_dtype).tobytes()
                 + covered_values.astype(little_endian, copy=False).tobytes()
             )
-    if not 1 <= subspace.precision_bits <= 8 * value_dtype.itemsize:
+    if subspace.precision_bits != 8 * value_dtype.itemsize:
         raise ValueError(
-            f"precision_bits must be in [1, {8 * value_dtype.itemsize}] for "
-            f"dtype {value_dtype}, got {subspace.precision_bits} (the "
-            "container dtype must be wide enough for the stored format)"
+            "precision_bits is the exact stored width of each value, so it "
+            f"must equal the container width {8 * value_dtype.itemsize} of "
+            f"dtype {value_dtype} until the bit-packing codec is "
+            f"implemented; got {subspace.precision_bits}"
         )
     number_format = subspace.number_format
     assert number_format is not None  # normalized in Subspace.__post_init__
@@ -714,11 +725,6 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         raise ValueError(
             f"Invalid value dtype {dtype_kind!r} with itemsize {itemsize}"
         ) from error
-    if not 1 <= precision_bits <= 8 * itemsize:
-        raise ValueError(
-            f"precision_bits must be in [1, {8 * itemsize}] for "
-            f"dtype {value_dtype}, got {precision_bits}"
-        )
     # raises ValueError for structurally invalid flavor bytes
     number_format = NumberFormat.from_byte(number_format_byte)
     if (0 if number_format.unsigned else 1) + number_format.exponent_bits > (
@@ -727,6 +733,13 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         raise ValueError(
             f"Number format {number_format} does not fit in "
             f"{precision_bits} precision bits"
+        )
+    if precision_bits != 8 * itemsize:
+        raise ValueError(
+            "precision_bits is the exact stored width of each value, so it "
+            f"must equal the container width {8 * itemsize} of dtype "
+            f"{value_dtype} until the bit-packing codec is implemented; "
+            f"got {precision_bits}"
         )
 
     if kind == TensorKind.EMPTY:

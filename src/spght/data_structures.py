@@ -106,10 +106,10 @@ class Subspace:
     """Describe one logical subspace in memory and on disk."""
 
     extents: tuple[int, ...]
-    # total bits of the stored scalars' number format, 1..255: equal to
-    # the dtype's width for native precision, smaller when the values
-    # come from a narrower format (see number_format) widened losslessly
-    # into the container dtype (e.g. 16 in float32 for bfloat16)
+    # the exact number of bits each stored value occupies in a file's
+    # packed value stream (the data blob after any compression is
+    # undone), 1..255. Until the bit-packing codec is implemented this
+    # must equal the container dtype's width (8 * itemsize).
     precision_bits: int
     data: Tensor | None = None
     # the flavor of the (precision_bits)-wide format the values live on;

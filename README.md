@@ -139,7 +139,7 @@ correctly once the reader seeks to its first magic byte.
 | 1 | uint8 | value dtype: item size in bytes (together e.g. `f8` = float64, `i1` = int8); the dtype describes **one scalar component** and is authoritative for decoding — it is never multiplexed with a component count |
 | 1 | uint8 | `num_components` (must be 1; reserved, see below) |
 | 1 | uint8 | `component_layout` (must be 0; reserved, see below) |
-| 1 | uint8 | precision bits: total bits of the stored number format, per scalar component (see *Value dtype and number format*) |
+| 1 | uint8 | precision bits: the exact number of bits each stored value occupies in the packed value stream (the blob after decompression), per scalar component; currently enforced equal to `8 · itemsize` (see *Value dtype and number format*) |
 | 1 | uint8 | number format: bits 0–4 exponent width, bit 5 unsigned flag, bits 6–7 special-value convention (see *Value dtype and number format*) |
 | 2 | uint16 | padding bits (trailing slack bits; meaningful only under a future bit-packing transform, carried verbatim until then) |
 | 1 | uint8 | compression (0 = none; reserved) |
@@ -174,26 +174,35 @@ The blob content depends on the tensor kind:
   (2 · index size)`, and validated against the entry count before the blob
   is read. Positions outside every run are implicitly zero; covered values
   *may* include explicit zeros — the writer bridges a gap of `g` zeros into
-  one run whenever `g · value size ≤ 2 · index size`, i.e. whenever storing
-  the zeros costs no more than the extra pair of run bounds.
+  one run whenever `g · precision_bits ≤ 2 · index bits`, i.e. whenever
+  storing the zeros costs no more bits than the extra pair of run bounds.
+  Lower-precision values therefore admit proportionally longer bridges.
 
-Writers re-encode each subspace into whichever kind yields the smallest
-blob, independently of its in-memory representation: only the *nonzero*
-entries count (values reset to zero drop out), so heavily thinned data
-falls back to `POINTWISE` and densified data to `FULL`. Further kinds get
-new tensor-kind values.
+Writers re-encode each subspace into whichever kind carries the least
+information, independently of its in-memory representation: indices cost
+their dtype width, values their exact stored width (`precision_bits`),
+and only the *nonzero* entries count (values reset to zero drop out) —
+heavily thinned data falls back to `POINTWISE` and densified data to
+`FULL`. Further kinds get new tensor-kind values.
 
 ### Value dtype and number format
 
-The value dtype is the **storage container**: it alone determines how the
-blob is sliced into scalars and decoded, and it is restricted to standard
-(numpy-native) formats, so every reader decodes with native machinery.
-The two bytes that follow describe the **number format the values live
-on** — parametrically, so that new low-precision formats need no change
-to this specification:
+The value dtype is the **decode target**: values are handed to the
+application as this container type, which is restricted to standard
+(numpy-native) formats. The two bytes that follow describe the stored
+number format — parametrically, so that new low-precision formats need
+no change to this specification:
 
-- **precision bits** (1 to `8 * itemsize`): the total bit width of the
-  format.
+- **precision bits** (1 to `8 * itemsize`): the **exact number of bits
+  each stored value occupies in the packed value stream** — the layer
+  *behind* any compression, so the full decode pipeline is: blob →
+  undo the `compression` codec (a black box; 0 = none, then blob and
+  stream coincide) → split into `precision`-wide bit fields → widen each field into the
+  container dtype according to the flavor byte.  A precision equal
+  to the container width means plain native storage. *Until the
+  bit-packing codec is implemented, writer and reader enforce equality
+  with the container width*, so this is currently a hard invariant
+  rather than a choice.
 - **number format** (the flavor byte): bits 0–4 hold the exponent width
   `e` (0 = integer, no exponent), bit 5 the unsigned flag (no sign bit),
   bits 6–7 the special-value convention. The mantissa width is *derived*
@@ -213,21 +222,17 @@ IEEE), float8-E5M2 (8, e5, IEEE), float8-E4M3FN (8, e4, FN), the
 FNUZ fp8 variants, fp4 E2M1 (4, e2, IEEE), the E8M0 scale format
 (8, e8, unsigned, FN), and int/uint of any width (`e = 0`).
 
-Crucially, the values always travel **widened losslessly into the
-container dtype** (every fp8/fp4 value is exactly representable in
-float16): the flavor bytes never change how bytes are decoded, they
-declare which grid the decoded values lie on. A reader that ignores
-them — or meets `OTHER`, the escape hatch for non-parametric formats
-such as posits, whose provenance a metadata entry may record — still
-reads exact values; only transcoding, re-quantization, and rate
-accounting need the flavor. Storing narrow formats *tightly* (paying 8
-bits on disk, not 16) is a future transform behind the reserved
-`compression` byte — packing the raw `precision`-wide bit patterns back
-to back, `padding_bits` closing the final byte — again parametric, one
-transform for every flavor. Block-scaled formats (e.g. MXFP4's shared
-scale per 32 values) are *not* a number format: they are a future
-granularity extension of the quantization fields, composing with the
-flavor byte.
+Because `precision_bits` is the stored width, it determines the size of
+the decompressed value stream once packing lands: `precision`-wide fields
+back to back, `padding_bits` closing the final byte, and one parametric
+widening routine (per the flavor byte) decodes every such format —
+nothing per-format enters this specification. Every narrow float widens
+*exactly* into its container (fp8/fp4 values are exactly representable in
+float16), so decoding is lossless by construction. The `OTHER` convention
+is the escape hatch for non-parametric formats. Block-scaled formats (e.g.
+MXFP4's shared scale per 32 values) are *not* a number format: they are a
+future granularity extension of the quantization fields, composing with
+the flavor byte.
 
 ### Basis descriptors
 
@@ -369,11 +374,13 @@ offsets without communication; one rank finalizes the header.
 - The number of dimensions is a uint16: 1 to 65535. Levels are stored as
   single bytes. Extents are uint32 per dimension -- which effectively
   caps levels to 32 per dimension -- and byte counts are uint64.
-- The precision and number format bytes never change how blob bytes are
-  decoded (the dtype does); writer and reader both reject precision
-  outside `[1, 8 * itemsize]`, structurally invalid flavor bytes, and
-  formats whose sign + exponent bits exceed the precision.
-  `compression` is reserved and must currently be 0.
+- `precision_bits` is the stored width of each value in the decompressed
+  value stream and thus (once packing lands) determines that stream's
+  size — equal to the blob's while `compression` is 0; writer and reader
+  both reject precision different from the container width
+  `8 * itemsize` (until the bit-packing codec exists), structurally
+  invalid flavor bytes, and formats whose sign + exponent bits exceed
+  the precision. `compression` is reserved and must currently be 0.
 
 ## License
 
