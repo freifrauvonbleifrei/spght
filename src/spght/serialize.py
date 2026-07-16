@@ -119,8 +119,11 @@ Subspace record:
                            firsts, then the matching run lasts (both
                            inclusive) -- then the values of every covered
                            position, run by run. Runs are sorted, disjoint,
-                           and maximal (gap >= 1); the run count is derived
-                           from the blob size
+                           and separated by >= 1 uncovered position; the
+                           run count is derived from the blob size. Covered
+                           values may include explicit zeros: the writer
+                           bridges zero gaps into a run while that is no
+                           costlier than an extra pair of bounds
         FULL               the linear value buffer
         EMPTY              nothing
     checksum               uint32, crc32 of the data blob (verified on read);
@@ -510,26 +513,51 @@ def _open_stream(target: "str | Path | BinaryIO", mode: str) -> tuple[BinaryIO, 
 
 
 def _stored_entries(data: Tensor) -> "tuple[np.ndarray, np.ndarray]":
-    """The (sorted keys, values) a sparse-style record stores: the stored
-    entries of sparse tensors, the nonzeros of dense ones."""
+    """The nonzero (sorted keys, values) of the tensor. Explicit zeros of
+    sparse-style tensors are dropped, so a tensor whose values were partly
+    reset to zero re-encodes as if those entries had never been stored."""
     if data.is_sparse:
-        return data.linear_indices, data.linear_values
+        keys, values = data.linear_indices, data.linear_values
+        nonzero = values != 0
+        if not bool(nonzero.all()):
+            keys, values = keys[nonzero], values[nonzero]
+        return keys, values
     keys = np.flatnonzero(data.linear_values)
     return keys, data.linear_values[keys]
 
 
+def _bridged_runs(
+    keys: "np.ndarray", index_itemsize: int, value_itemsize: int
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Runs of the given nonzero positions, with short zero gaps bridged:
+    storing a gap's zeros explicitly costs gap * value_itemsize bytes,
+    splitting costs one extra pair of run bounds -- so gaps of up to
+    2 * index_itemsize / value_itemsize zeros are cheaper (or equal, with
+    fewer runs) inside a run. Once values are stored bit-packed, their
+    per-entry cost shrinks to precision_bits / 8, admitting even longer
+    bridges in this same inequality."""
+    firsts, lasts = runs_from_sorted_keys(keys)
+    if firsts.size <= 1:
+        return firsts, lasts
+    gaps = firsts[1:] - lasts[:-1] - 1
+    split_after = np.flatnonzero(gaps * value_itemsize > 2 * index_itemsize)
+    merged_firsts = firsts[np.concatenate(([0], split_after + 1))]
+    merged_lasts = lasts[np.concatenate((split_after, [lasts.size - 1]))]
+    return merged_firsts, merged_lasts
+
+
 def _cheapest_kind(
-    size: int, itemsize: int, num_stored: int, num_runs: int
+    size: int, itemsize: int, num_nonzero: int, num_runs: int, num_covered: int
 ) -> TensorKind:
     """The on-disk kind with the smallest data blob; ties go to the
     simpler kind (FULL, then POINTWISE, then INTERVALS)."""
     index_itemsize = _index_dtype(size).itemsize
     kind = TensorKind.FULL
     cheapest = size * itemsize
-    sparse_bytes = num_stored * (index_itemsize + itemsize)
+    sparse_bytes = num_nonzero * (index_itemsize + itemsize)
     if sparse_bytes < cheapest:
         kind, cheapest = TensorKind.POINTWISE, sparse_bytes
-    interval_bytes = 2 * num_runs * index_itemsize + num_stored * itemsize
+    interval_bytes = 2 * num_runs * index_itemsize + num_covered * itemsize
     if interval_bytes < cheapest:
         kind = TensorKind.INTERVALS
     return kind
@@ -574,11 +602,14 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
         # independently of the in-memory tensor kind (implicit and explicit
         # zeros read back identically)
         keys, values = _stored_entries(data)
-        run_firsts, run_lasts = runs_from_sorted_keys(keys)
-        kind = _cheapest_kind(
-            data.size, value_dtype.itemsize, len(values), len(run_firsts)
-        )
         index_dtype = _index_dtype(data.size)
+        run_firsts, run_lasts = _bridged_runs(
+            keys, index_dtype.itemsize, value_dtype.itemsize
+        )
+        num_covered = int((run_lasts - run_firsts + 1).sum())
+        kind = _cheapest_kind(
+            data.size, value_dtype.itemsize, len(values), len(run_firsts), num_covered
+        )
         if kind == TensorKind.FULL:
             if data.is_sparse:
                 flat = np.zeros(data.size, dtype=value_dtype)
@@ -594,11 +625,16 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
                 + values.astype(little_endian, copy=False).tobytes()
             )
         else:  # TensorKind.INTERVALS
-            num_stored = len(values)
+            # scatter the nonzeros into the covered buffer
+            covered_values = np.zeros(num_covered, dtype=value_dtype)
+            offsets = np.concatenate(([0], np.cumsum(run_lasts - run_firsts + 1)[:-1]))
+            run = np.searchsorted(run_firsts, keys, side="right") - 1
+            covered_values[offsets[run] + keys - run_firsts[run]] = values
+            num_stored = num_covered
             blob = (
                 run_firsts.astype(index_dtype).tobytes()
                 + run_lasts.astype(index_dtype).tobytes()
-                + values.astype(little_endian, copy=False).tobytes()
+                + covered_values.astype(little_endian, copy=False).tobytes()
             )
     if not 1 <= subspace.precision_bits <= 8 * value_dtype.itemsize:
         raise ValueError(
@@ -747,9 +783,9 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
     else:  # TensorKind.INTERVALS
         split = num_runs * index_dtype.itemsize
         run_firsts = np.frombuffer(blob[:split], dtype=index_dtype).astype(np.int64)
-        run_lasts = np.frombuffer(
-            blob[split : 2 * split], dtype=index_dtype
-        ).astype(np.int64)
+        run_lasts = np.frombuffer(blob[split : 2 * split], dtype=index_dtype).astype(
+            np.int64
+        )
         values = np.frombuffer(
             blob[2 * split :], dtype=value_dtype.newbyteorder("<")
         ).astype(value_dtype)

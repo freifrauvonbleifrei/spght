@@ -22,7 +22,7 @@ from spght.data_structures import (
 )
 from spght.hierarchize import hierarchize, dehierarchize
 from spght.lifting import Basis1D
-from spght.serialize import _index_dtype
+from spght.serialize import _bridged_runs, _index_dtype
 from spght.tensor import DenseTensor, IntervalTensor, SparseTensor
 from spght.wavelets import haar_basis, cdf_2_2_basis, cubic_basis, hat_basis
 
@@ -800,3 +800,74 @@ def test_read_rejects_overlapping_interval_runs():
     _struct.pack_into("<I", corrupted, blob_offset + num_blob, _zlib.crc32(blob))
     with pytest.raises(ValueError, match="disjoint"):
         SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_intervals_bridge_short_zero_gaps():
+    # float16 values (2 bytes) with uint16 indices (2 bytes): a gap of g
+    # zeros is bridged iff g * 2 <= 2 * 2, i.e. g <= 2 (ties bridge)
+    values = np.zeros(300, dtype=np.float16)
+    values[10:20] = 1.0
+    values[22:31] = 2.0  # gap of 2 zeros -> bridged
+    values[40:50] = 3.0  # gap of 9 zeros -> split
+    keys = np.flatnonzero(values)
+    firsts, lasts = _bridged_runs(keys, index_itemsize=2, value_itemsize=2)
+    assert firsts.tolist() == [10, 40] and lasts.tolist() == [30, 49]
+
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(9,),
+        subspaces={
+            (9,): Subspace(
+                extents=(300,),
+                precision_bits=16,
+                data=DenseTensor.from_dense(values),
+            )
+        },
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    loaded = SparseGridHierarchicalTensors.read(buffer)
+    subspace = loaded.subspaces[(9,)]
+    assert subspace.kind == TensorKind.INTERVALS
+    assert subspace.data.num_runs == 2
+    # the bridged gap travels as explicit zeros inside the first run
+    assert subspace.data[np.array([20, 21])].tolist() == [0.0, 0.0]
+    assert np.array_equal(subspace.data.to_dense(), values)
+
+
+def test_reencodes_zeroed_intervals_as_pointwise():
+    # a long run whose values were mostly reset to zero re-encodes from
+    # the two surviving nonzeros, for which pointwise is cheapest
+    values = np.zeros(64)
+    values[0:40] = np.arange(1.0, 41.0)
+    data = IntervalTensor.from_dense(values)
+    data[np.arange(1, 39)] = 0.0  # in-run zero writes keep the run
+    assert data.num_runs == 1 and data.nnz == 40
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(6,),
+        subspaces={(6,): Subspace(extents=(64,), precision_bits=64, data=data)},
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    subspace = SparseGridHierarchicalTensors.read(buffer).subspaces[(6,)]
+    assert subspace.kind == TensorKind.POINTWISE
+    assert subspace.data.nnz == 2
+    assert np.array_equal(subspace.data.to_dense(), data.to_dense())
+
+
+def test_reencodes_densified_intervals_as_full():
+    data = IntervalTensor.from_dense(np.arange(1.0, 65.0))  # fully covered
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(6,),
+        subspaces={(6,): Subspace(extents=(64,), precision_bits=64, data=data)},
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    subspace = SparseGridHierarchicalTensors.read(buffer).subspaces[(6,)]
+    assert subspace.kind == TensorKind.FULL
+    assert np.array_equal(subspace.data.to_dense(), data.to_dense())

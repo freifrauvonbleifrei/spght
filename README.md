@@ -165,17 +165,23 @@ The blob content depends on the tensor kind:
   uint16 up to 2^16, uint32 up to 2^32, else uint64); this type is derived
   from the extents and not stored explicitly. Entries not listed are
   implicitly zero.
-- **`INTERVALS` (3)**: maximal runs of consecutive linear indices — all run
+- **`INTERVALS` (3)**: runs of consecutive linear indices — all run
   *first* indices, then the matching run *last* indices (both inclusive, in
   the same index type as `POINTWISE`) — followed by the values of every
   covered position, run by run. Runs must be sorted, disjoint, and separated
   by at least one uncovered position; readers reject anything else. The run count is not stored: it
   is derived from the blob size, `(num data bytes − entries · value size) /
   (2 · index size)`, and validated against the entry count before the blob
-  is read. Positions outside every run are implicitly zero.
+  is read. Positions outside every run are implicitly zero; covered values
+  *may* include explicit zeros — the writer bridges a gap of `g` zeros into
+  one run whenever `g · value size ≤ 2 · index size`, i.e. whenever storing
+  the zeros costs no more than the extra pair of run bounds.
 
-Writers pick whichever kind yields the smallest blob for each subspace;
-further kinds get new tensor-kind values.
+Writers re-encode each subspace into whichever kind yields the smallest
+blob, independently of its in-memory representation: only the *nonzero*
+entries count (values reset to zero drop out), so heavily thinned data
+falls back to `POINTWISE` and densified data to `FULL`. Further kinds get
+new tensor-kind values.
 
 ### Value dtype and number format
 
