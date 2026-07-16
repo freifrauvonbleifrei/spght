@@ -44,8 +44,9 @@ def cast_precision(
                 data = spght.DenseTensor(
                     data.linear_values.astype(dtype), data.shape, order=data.order
                 )
+        # number_format=None re-derives the flavor from the new dtype
         tensors.subspaces[level] = replace(
-            subspace, data=data, precision_bits=precision_bits
+            subspace, data=data, precision_bits=precision_bits, number_format=None
         )
     return tensors
 

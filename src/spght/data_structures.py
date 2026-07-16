@@ -7,8 +7,11 @@ The binary encoding details may still evolve.
 """
 
 from dataclasses import dataclass, field
+from enum import IntEnum
 from pathlib import Path
 from typing import BinaryIO, Sequence, Union
+
+import numpy as np
 
 from spght.lifting import Basis1D
 from spght.linearize import Order
@@ -40,15 +43,84 @@ MetadataValue = Union[
 ]
 
 
+class Convention(IntEnum):
+    """Special-value convention of a number format; implies the exponent
+    bias for floats."""
+
+    IEEE = 0  # bias 2^(e-1) - 1; infinities and NaNs at all-ones exponent
+    FN = 1  # finite only: same bias, no infinities, a single NaN (E4M3FN)
+    FNUZ = 2  # finite, bias 2^(e-1), NaN at the negative-zero pattern
+    OTHER = 3  # not parametric (e.g. posits); grid unknown, values exact
+
+
+@dataclass(frozen=True, slots=True)
+class NumberFormat:
+    """Flavor of a subspace's stored number format, one byte on disk."""
+
+    exponent_bits: int = 0
+    unsigned: bool = False
+    convention: Convention = Convention.IEEE
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.exponent_bits <= 31:
+            raise ValueError(
+                f"exponent_bits must fit in 5 bits, got {self.exponent_bits}"
+            )
+        convention = Convention(self.convention)  # raises on unknown values
+        if convention in (Convention.FN, Convention.FNUZ) and self.exponent_bits == 0:
+            raise ValueError(
+                "The FN and FNUZ conventions describe floats and need "
+                "exponent_bits >= 1"
+            )
+        if convention == Convention.OTHER and (self.exponent_bits or self.unsigned):
+            raise ValueError(
+                "The OTHER convention is stored canonically: "
+                "exponent_bits == 0 and signed"
+            )
+
+    def to_byte(self) -> int:
+        """Pack into the on-disk byte: bits 0-4 exponent width, bit 5
+        unsigned flag, bits 6-7 convention."""
+        return self.exponent_bits | int(self.unsigned) << 5 | int(self.convention) << 6
+
+    @classmethod
+    def from_byte(cls, byte: int) -> "NumberFormat":
+        return cls(byte & 0x1F, bool(byte >> 5 & 1), Convention(byte >> 6 & 0x3))
+
+    @classmethod
+    def from_dtype(cls, dtype: "np.dtype | type") -> "NumberFormat":
+        """The native flavor of a numpy dtype (e.g. float32 -> 8 exponent
+        bits, IEEE)."""
+        dtype = np.dtype(dtype)
+        if dtype.kind == "f":
+            return cls(exponent_bits=np.finfo(dtype).nexp)
+        if dtype.kind == "i":
+            return cls()
+        if dtype.kind == "u":
+            return cls(unsigned=True)
+        return cls(convention=Convention.OTHER)
+
+
 @dataclass(frozen=True, slots=True)
 class Subspace:
     """Describe one logical subspace in memory and on disk."""
 
     extents: tuple[int, ...]
-    # informational in v0.1: values are stored at their dtype's width,
-    # a custom precision is not (yet) enforced
+    # total bits of the stored scalars' number format, 1..255: equal to
+    # the dtype's width for native precision, smaller when the values
+    # come from a narrower format (see number_format) widened losslessly
+    # into the container dtype (e.g. 16 in float32 for bfloat16)
     precision_bits: int
     data: Tensor | None = None
+    # the flavor of the (precision_bits)-wide format the values live on;
+    # derived from the data dtype (or float64 without data) when None
+    number_format: NumberFormat | None = None
+    # reserved for future use (multiwavelets, per-subspace p-adaptivity):
+    # number of values stored per spatial point
+    num_components: int = 1
+    # how a multi-component blob is arranged:
+    # 0 = component-major planes (SoA), 1 = interleaved per point (AoS)
+    component_layout: int = 0
     # two quantization parameters, reserved for future use with the
     # semantics logical = scale * (stored - zero_point)
     quantization_scale: float = 1.0
@@ -74,10 +146,37 @@ class Subspace:
         return self.data.nbytes if self.data is not None else 0
 
     def __post_init__(self) -> None:
-        if self.precision_bits <= 0:
-            raise ValueError("precision_bits must be positive")
+        if not 1 <= self.precision_bits <= 255:
+            raise ValueError(
+                f"precision_bits must fit in one byte, got {self.precision_bits}"
+            )
+        if self.number_format is None:
+            derived = (
+                NumberFormat.from_dtype(self.data.dtype)
+                if self.data is not None
+                else NumberFormat.from_dtype(np.float64)
+            )
+            object.__setattr__(self, "number_format", derived)
+        number_format = self.number_format
+        assert number_format is not None
+        sign_bit = 0 if number_format.unsigned else 1
+        if sign_bit + number_format.exponent_bits > self.precision_bits:
+            raise ValueError(
+                f"number format {number_format} needs at least "
+                f"{sign_bit + number_format.exponent_bits} bits, but "
+                f"precision_bits is {self.precision_bits}"
+            )
         if self.padding_bits < 0:
             raise ValueError("padding_bits must not be negative")
+        if not 1 <= self.num_components <= 255:
+            raise ValueError(
+                f"num_components must fit in one byte, got {self.num_components}"
+            )
+        if self.component_layout not in (0, 1):
+            raise ValueError(
+                "component_layout must be 0 (planes) or 1 (interleaved), "
+                f"got {self.component_layout}"
+            )
         if self.data is not None and tuple(self.data.shape) != tuple(self.extents):
             raise ValueError(
                 f"data shape {self.data.shape} does not match extents {self.extents}"
@@ -163,8 +262,8 @@ class SparseGridHierarchicalTensors:
         self._sort_subspaces()
 
     def write(self, target: "str | Path | BinaryIO") -> None:
-        """Write the hierarchy to disk in the v0.4 binary layout
-        (see spght.serialize for the format description)."""
+        """Write the hierarchy to disk in the spght binary format
+        (see spght.serialize for the layout description)."""
         # imported lazily: serialize imports this class
         from spght.serialize import write
 

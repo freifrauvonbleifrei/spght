@@ -24,7 +24,9 @@ from spght.basis import (
 )
 from spght.compress import compress
 from spght.data_structures import (
+    Convention,
     MetadataValue,
+    NumberFormat,
     OpaqueValue,
     SparseGridHierarchicalTensors,
     Subspace,
@@ -55,12 +57,14 @@ __all__ = [
     "BoundaryRule",
     "CellCentered",
     "Centering",
+    "Convention",
     "DenseTensor",
     "Dirichlet",
     "Extrapolate",
     "LiftingScheme",
     "LiftingStep",
     "Neumann",
+    "NumberFormat",
     "Order",
     "Periodic",
     "SparseGridHierarchicalTensors",

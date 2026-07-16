@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Binary serialization of SparseGridHierarchicalTensors, format v0.4.
+"""Binary serialization of SparseGridHierarchicalTensors, format v0.5.
 
 Layout (little endian throughout):
 
@@ -83,9 +83,30 @@ Subspace record:
     extents                uint32 per dimension
     order code             uint8: C=0, F=1, ZC=2, ZF=3
     tensor kind            uint8, TensorKind value
-    value dtype            numpy kind char (1 byte) + itemsize (uint8)
-    precision bits         uint16
-    padding bits           uint16
+    value dtype            numpy kind char (1 byte) + itemsize (uint8);
+    num components         uint8; reserved (must be 1): number of values
+                           stored per spatial point.
+    component layout       uint8; reserved (must be 0): how the values of
+                           a multi-component blob are arranged --
+                           planes=0 (SoA, one complete spatial
+                           linearization per component, back to back) or
+                           interleaved=1 (AoS, the components of each
+                           point stored together, points in linearization
+                           order).
+    precision bits         uint8, 1 to 8 * dtype itemsize: total bits of
+                           the stored scalars' number format
+    number format          uint8, the format's flavor: bits 0-4 exponent
+                           width e (0 = integer), bit 5 unsigned flag,
+                           bits 6-7 special-value convention (IEEE=0,
+                           FN=1, FNUZ=2, OTHER=3). The bias is
+                           implied by the convention (IEEE/FN:
+                           2^(e-1)-1, FNUZ: 2^(e-1)). The container
+                           dtype holds the exact widened values, so
+                           readers decode correctly without interpreting
+                           this byte
+    padding bits           uint16; trailing slack bits, meaningful only
+                           under a future bit-packing transform
+                           (carried verbatim until then)
     compression            uint8
     quantization_scale     float32; reserved, with the future semantics
     quantization_zero_pt   int32     logical = scale * (stored - zero_point)
@@ -121,6 +142,7 @@ from spght.basis import (
 )
 from spght.data_structures import (
     MetadataValue,
+    NumberFormat,
     OpaqueValue,
     SparseGridHierarchicalTensors,
     Subspace,
@@ -131,14 +153,14 @@ from spght.tensor import DenseTensor, SparseTensor, Tensor, TensorKind
 from spght.util import per_dimension
 
 FormatMagic = b"sparse grid hierarchical tensors\0"
-FormatVersion: tuple[int, int] = (0, 4)
+FormatVersion: tuple[int, int] = (0, 5)
 
 _ORDER_TO_CODE: dict[Order, int] = {"C": 0, "F": 1, "ZC": 2, "ZF": 3}
 _CODE_TO_ORDER: dict[int, Order] = {c: o for o, c in _ORDER_TO_CODE.items()}
 
 _HEADER = struct.Struct("<33sBBHQ")  # magic, major, minor, ndim, num subspaces
 _HEADER_CRC = struct.Struct("<I")  # closes the header, covers all bytes before it
-_RECORD = struct.Struct("<BBcBHHBfiQQ")  # see subspace record layout above
+_RECORD = struct.Struct("<BBcBBBBBHBfiQQ")  # see subspace record layout above
 _RECORD_CRC = struct.Struct("<I")  # follows each record's data blob
 
 
@@ -492,6 +514,16 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
             "The quantization fields are reserved: only identity "
             "(scale=1, zero_point=0) can be serialized"
         )
+    if subspace.num_components != 1:
+        raise ValueError(
+            "num_components is reserved: only 1 can be serialized, "
+            f"got {subspace.num_components}"
+        )
+    if subspace.component_layout != 0:
+        raise ValueError(
+            "component_layout is reserved: only 0 (planes) can be "
+            f"serialized, got {subspace.component_layout}"
+        )
     if any(not 0 <= extent <= 0xFFFFFFFF for extent in subspace.extents):
         raise ValueError(
             f"Extents must fit in uint32 each, got {subspace.extents} "
@@ -531,12 +563,23 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
                 keys.astype(_index_dtype(data.size)).tobytes()
                 + values.astype(little_endian, copy=False).tobytes()
             )
+    if not 1 <= subspace.precision_bits <= 8 * value_dtype.itemsize:
+        raise ValueError(
+            f"precision_bits must be in [1, {8 * value_dtype.itemsize}] for "
+            f"dtype {value_dtype}, got {subspace.precision_bits} (the "
+            "container dtype must be wide enough for the stored format)"
+        )
+    number_format = subspace.number_format
+    assert number_format is not None  # normalized in Subspace.__post_init__
     fixed = _RECORD.pack(
         _ORDER_TO_CODE[subspace.order],
         int(kind),
         value_dtype.kind.encode("ascii"),
         value_dtype.itemsize,
+        subspace.num_components,
+        subspace.component_layout,
         subspace.precision_bits,
+        number_format.to_byte(),
         subspace.padding_bits,
         subspace.compression,
         subspace.quantization_scale,
@@ -555,7 +598,10 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         kind_code,
         dtype_kind,
         itemsize,
+        num_components,
+        component_layout,
         precision_bits,
+        number_format_byte,
         padding_bits,
         compression,
         quantization_scale,
@@ -579,6 +625,14 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
             f"(scale=1, zero_point=0), got scale={quantization_scale}, "
             f"zero_point={quantization_zero_point}"
         )
+    if num_components != 1:
+        raise ValueError(
+            f"Reserved num_components byte must be 1, got {num_components}"
+        )
+    if component_layout != 0:
+        raise ValueError(
+            f"Reserved component_layout byte must be 0, got {component_layout}"
+        )
     shape = tuple(int(e) for e in extents)
     total = math.prod(shape) if shape else 1  # Python ints: no int64 overflow
     try:
@@ -587,6 +641,20 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         raise ValueError(
             f"Invalid value dtype {dtype_kind!r} with itemsize {itemsize}"
         ) from error
+    if not 1 <= precision_bits <= 8 * itemsize:
+        raise ValueError(
+            f"precision_bits must be in [1, {8 * itemsize}] for "
+            f"dtype {value_dtype}, got {precision_bits}"
+        )
+    # raises ValueError for structurally invalid flavor bytes
+    number_format = NumberFormat.from_byte(number_format_byte)
+    if (0 if number_format.unsigned else 1) + number_format.exponent_bits > (
+        precision_bits
+    ):
+        raise ValueError(
+            f"Number format {number_format} does not fit in "
+            f"{precision_bits} precision bits"
+        )
 
     if kind == TensorKind.EMPTY:
         if num_stored != 0:
@@ -631,6 +699,9 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         extents=shape,
         precision_bits=precision_bits,
         data=data,
+        number_format=number_format,
+        num_components=num_components,
+        component_layout=component_layout,
         quantization_scale=quantization_scale,
         quantization_zero_point=quantization_zero_point,
         padding_bits=padding_bits,
@@ -641,7 +712,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
 def write(
     tensors: SparseGridHierarchicalTensors, target: "str | Path | BinaryIO"
 ) -> None:
-    """Write the hierarchy to a path or binary stream in the v0.4 layout."""
+    """Write the hierarchy to a path or binary stream in the v0.5 layout."""
     num_dims = tensors.dimensions
     if not 1 <= num_dims <= 65535:
         raise ValueError(f"Number of dimensions must fit in uint16, got {num_dims}")
