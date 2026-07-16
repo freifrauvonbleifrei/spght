@@ -347,7 +347,7 @@ def test_scheme_name_limited_to_15_characters():
     assert SparseGridHierarchicalTensors.read(buffer).bases[0].scheme.name == "a" * 15
 
 
-def _first_record_offset(raw: bytes) -> tuple[int, int]:
+def _first_record_offset(raw: "bytes | bytearray") -> tuple[int, int]:
     (num_dims,) = _struct.unpack_from("<H", raw, 35)
     (num_subspaces,) = _struct.unpack_from("<Q", raw, 37)
     (basis_length,) = _struct.unpack_from("<I", raw, 45 + 2 * num_dims)
@@ -803,14 +803,14 @@ def test_read_rejects_overlapping_interval_runs():
 
 
 def test_intervals_bridge_short_zero_gaps():
-    # float16 values (2 bytes) with uint16 indices (2 bytes): a gap of g
-    # zeros is bridged iff g * 2 <= 2 * 2, i.e. g <= 2 (ties bridge)
+    # 16 precision bits with uint16 indices (16 bits): a gap of g zeros is
+    # bridged iff g * 16 <= 2 * 16, i.e. g <= 2 (ties bridge)
     values = np.zeros(300, dtype=np.float16)
     values[10:20] = 1.0
     values[22:31] = 2.0  # gap of 2 zeros -> bridged
     values[40:50] = 3.0  # gap of 9 zeros -> split
     keys = np.flatnonzero(values)
-    firsts, lasts = _bridged_runs(keys, index_itemsize=2, value_itemsize=2)
+    firsts, lasts = _bridged_runs(keys, index_bits=16, value_bits=16)
     assert firsts.tolist() == [10, 40] and lasts.tolist() == [30, 49]
 
     tensors = SparseGridHierarchicalTensors(
@@ -871,3 +871,34 @@ def test_reencodes_densified_intervals_as_full():
     subspace = SparseGridHierarchicalTensors.read(buffer).subspaces[(6,)]
     assert subspace.kind == TensorKind.FULL
     assert np.array_equal(subspace.data.to_dense(), data.to_dense())
+
+
+def test_interval_bridging_scales_with_precision():
+    # same float16 container, same gap of 4 zeros: 16 precision bits split
+    # (4 * 16 > 2 * 16), 8 precision bits bridge (4 * 8 <= 2 * 16) -- lower
+    # precision admits proportionally longer bridges
+    values = np.zeros(300, dtype=np.float16)
+    values[10:20] = 1.0
+    values[24:31] = 2.0  # gap of 4 zeros
+    def run_count(precision_bits: int) -> int:
+        tensors = SparseGridHierarchicalTensors(
+            dimensions=1,
+            max_level=(9,),
+            subspaces={
+                (9,): Subspace(
+                    extents=(300,),
+                    precision_bits=precision_bits,
+                    data=DenseTensor.from_dense(values),
+                )
+            },
+        )
+        buffer = io.BytesIO()
+        tensors.write(buffer)
+        buffer.seek(0)
+        subspace = SparseGridHierarchicalTensors.read(buffer).subspaces[(9,)]
+        assert isinstance(subspace.data, IntervalTensor)
+        assert np.array_equal(subspace.data.to_dense(), values)
+        return subspace.data.num_runs
+
+    assert run_count(precision_bits=16) == 2
+    assert run_count(precision_bits=8) == 1
