@@ -115,6 +115,12 @@ Subspace record:
     data blob:
         POINTWISE          linear indices in the smallest unsigned dtype that
                            fits prod(extents), then the linear value buffer
+        INTERVALS          run bounds in that same index dtype -- all run
+                           firsts, then the matching run lasts (both
+                           inclusive) -- then the values of every covered
+                           position, run by run. Runs are sorted, disjoint,
+                           and maximal (gap >= 1); the run count is derived
+                           from the blob size
         FULL               the linear value buffer
         EMPTY              nothing
     checksum               uint32, crc32 of the data blob (verified on read);
@@ -149,7 +155,14 @@ from spght.data_structures import (
 )
 from spght.lifting import Basis1D, LiftingScheme, LiftingStep
 from spght.linearize import Order
-from spght.tensor import DenseTensor, SparseTensor, Tensor, TensorKind
+from spght.tensor import (
+    DenseTensor,
+    IntervalTensor,
+    SparseTensor,
+    Tensor,
+    TensorKind,
+    runs_from_sorted_keys,
+)
 from spght.util import per_dimension
 
 FormatMagic = b"sparse grid hierarchical tensors\0"
@@ -496,12 +509,30 @@ def _open_stream(target: "str | Path | BinaryIO", mode: str) -> tuple[BinaryIO, 
     return target, False
 
 
-def _cheapest_kind(data: Tensor) -> TensorKind:
-    """The on-disk kind with the smaller data blob; ties go to FULL."""
-    index_itemsize = _index_dtype(data.size).itemsize
-    sparse_bytes = data.nnz * (index_itemsize + data.dtype.itemsize)
-    dense_bytes = data.size * data.dtype.itemsize
-    return TensorKind.POINTWISE if sparse_bytes < dense_bytes else TensorKind.FULL
+def _stored_entries(data: Tensor) -> "tuple[np.ndarray, np.ndarray]":
+    """The (sorted keys, values) a sparse-style record stores: the stored
+    entries of sparse tensors, the nonzeros of dense ones."""
+    if data.is_sparse:
+        return data.linear_indices, data.linear_values
+    keys = np.flatnonzero(data.linear_values)
+    return keys, data.linear_values[keys]
+
+
+def _cheapest_kind(
+    size: int, itemsize: int, num_stored: int, num_runs: int
+) -> TensorKind:
+    """The on-disk kind with the smallest data blob; ties go to the
+    simpler kind (FULL, then POINTWISE, then INTERVALS)."""
+    index_itemsize = _index_dtype(size).itemsize
+    kind = TensorKind.FULL
+    cheapest = size * itemsize
+    sparse_bytes = num_stored * (index_itemsize + itemsize)
+    if sparse_bytes < cheapest:
+        kind, cheapest = TensorKind.POINTWISE, sparse_bytes
+    interval_bytes = 2 * num_runs * index_itemsize + num_stored * itemsize
+    if interval_bytes < cheapest:
+        kind = TensorKind.INTERVALS
+    return kind
 
 
 def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
@@ -539,28 +570,34 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
     else:
         value_dtype = data.dtype
         little_endian = value_dtype.newbyteorder("<")
-        # store whichever representation yields the smaller data blob,
+        # store whichever representation yields the smallest data blob,
         # independently of the in-memory tensor kind (implicit and explicit
         # zeros read back identically)
-        kind = _cheapest_kind(data)
+        keys, values = _stored_entries(data)
+        run_firsts, run_lasts = runs_from_sorted_keys(keys)
+        kind = _cheapest_kind(
+            data.size, value_dtype.itemsize, len(values), len(run_firsts)
+        )
+        index_dtype = _index_dtype(data.size)
         if kind == TensorKind.FULL:
             if data.is_sparse:
                 flat = np.zeros(data.size, dtype=value_dtype)
-                flat[data.linear_indices] = data.linear_values
+                flat[keys] = values
             else:
                 flat = data.linear_values
             num_stored = data.size
             blob = flat.astype(little_endian, copy=False).tobytes()
-        else:
-            if data.is_sparse:
-                keys = data.linear_indices
-                values = data.linear_values
-            else:
-                keys = np.flatnonzero(data.linear_values)
-                values = data.linear_values[keys]
+        elif kind == TensorKind.POINTWISE:
             num_stored = len(values)
             blob = (
-                keys.astype(_index_dtype(data.size)).tobytes()
+                keys.astype(index_dtype).tobytes()
+                + values.astype(little_endian, copy=False).tobytes()
+            )
+        else:  # TensorKind.INTERVALS
+            num_stored = len(values)
+            blob = (
+                run_firsts.astype(index_dtype).tobytes()
+                + run_lasts.astype(index_dtype).tobytes()
                 + values.astype(little_endian, copy=False).tobytes()
             )
     if not 1 <= subspace.precision_bits <= 8 * value_dtype.itemsize:
@@ -664,11 +701,24 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         if num_stored != total:
             raise ValueError("Full subspace record must store every entry")
         expected_blob_bytes = total * itemsize
-    else:  # TensorKind.POINTWISE
+    elif kind == TensorKind.POINTWISE:
         if num_stored > total:
             raise ValueError("Sparse subspace stores more entries than it has")
         index_dtype = _index_dtype(total)
         expected_blob_bytes = num_stored * (index_dtype.itemsize + itemsize)
+    else:  # TensorKind.INTERVALS
+        if num_stored > total:
+            raise ValueError("Interval subspace stores more entries than it has")
+        index_dtype = _index_dtype(total)
+        # the run count is derived from the blob size; every constraint is
+        # checked before the blob is read
+        bounds_bytes = num_blob_bytes - num_stored * itemsize
+        if bounds_bytes < 0 or bounds_bytes % (2 * index_dtype.itemsize) != 0:
+            raise ValueError("Subspace data block has inconsistent size")
+        num_runs = bounds_bytes // (2 * index_dtype.itemsize)
+        if num_runs > num_stored or (num_runs == 0) != (num_stored == 0):
+            raise ValueError("Interval subspace has an inconsistent run count")
+        expected_blob_bytes = num_blob_bytes
     if num_blob_bytes != expected_blob_bytes:
         raise ValueError("Subspace data block has inconsistent size")
 
@@ -686,7 +736,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
             value_dtype
         )
         data = DenseTensor(flat, shape, order=order)
-    else:  # TensorKind.POINTWISE
+    elif kind == TensorKind.POINTWISE:
         split = num_stored * index_dtype.itemsize
         keys = np.frombuffer(blob[:split], dtype=index_dtype).astype(np.int64)
         values = np.frombuffer(
@@ -694,6 +744,17 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         ).astype(value_dtype)
         # SparseTensor validates key range and uniqueness
         data = SparseTensor.from_linear(keys, values, shape, order=order)
+    else:  # TensorKind.INTERVALS
+        split = num_runs * index_dtype.itemsize
+        run_firsts = np.frombuffer(blob[:split], dtype=index_dtype).astype(np.int64)
+        run_lasts = np.frombuffer(
+            blob[split : 2 * split], dtype=index_dtype
+        ).astype(np.int64)
+        values = np.frombuffer(
+            blob[2 * split :], dtype=value_dtype.newbyteorder("<")
+        ).astype(value_dtype)
+        # IntervalTensor validates bounds, disjointness, and maximality
+        data = IntervalTensor(run_firsts, run_lasts, values, shape, order=order)
 
     return Subspace(
         extents=shape,

@@ -43,7 +43,13 @@ from spght.wavelets import (
 )
 from spght.linearize import Order, midpoint_coordinates_from_level
 from spght.serialize import read, write
-from spght.tensor import DenseTensor, SparseTensor, Tensor, TensorKind
+from spght.tensor import (
+    DenseTensor,
+    IntervalTensor,
+    SparseTensor,
+    Tensor,
+    TensorKind,
+)
 
 try:
     __version__ = _version("spght")
@@ -61,6 +67,7 @@ __all__ = [
     "DenseTensor",
     "Dirichlet",
     "Extrapolate",
+    "IntervalTensor",
     "LiftingScheme",
     "LiftingStep",
     "Neumann",

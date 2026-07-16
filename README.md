@@ -134,7 +134,7 @@ correctly once the reader seeks to its first magic byte.
 |---|---|---|
 | `4 * d` | uint32 each | extents (logical shape of the subspace) |
 | 1 | uint8 | linearization order code: `C` = 0, `F` = 1, `ZC` = 2, `ZF` = 3 |
-| 1 | uint8 | tensor kind: `EMPTY` = 0, `FULL` = 1, `POINTWISE` = 2 |
+| 1 | uint8 | tensor kind: `EMPTY` = 0, `FULL` = 1, `POINTWISE` = 2, `INTERVALS` = 3 |
 | 1 | char | value dtype: numpy kind character (`f` float, `i` signed int, `u` unsigned int, ...) |
 | 1 | uint8 | value dtype: item size in bytes (together e.g. `f8` = float64, `i1` = int8); the dtype describes **one scalar component** and is authoritative for decoding — it is never multiplexed with a component count |
 | 1 | uint8 | `num_components` (must be 1; reserved, see below) |
@@ -165,8 +165,17 @@ The blob content depends on the tensor kind:
   uint16 up to 2^16, uint32 up to 2^32, else uint64); this type is derived
   from the extents and not stored explicitly. Entries not listed are
   implicitly zero.
+- **`INTERVALS` (3)**: maximal runs of consecutive linear indices — all run
+  *first* indices, then the matching run *last* indices (both inclusive, in
+  the same index type as `POINTWISE`) — followed by the values of every
+  covered position, run by run. Runs must be sorted, disjoint, and separated
+  by at least one uncovered position; readers reject anything else. The run count is not stored: it
+  is derived from the blob size, `(num data bytes − entries · value size) /
+  (2 · index size)`, and validated against the entry count before the blob
+  is read. Positions outside every run are implicitly zero.
 
-Future kinds (e.g. interval/run-based sparsity) get new tensor-kind values.
+Writers pick whichever kind yields the smallest blob for each subspace;
+further kinds get new tensor-kind values.
 
 ### Value dtype and number format
 

@@ -23,7 +23,7 @@ from spght.data_structures import (
 from spght.hierarchize import hierarchize, dehierarchize
 from spght.lifting import Basis1D
 from spght.serialize import _index_dtype
-from spght.tensor import DenseTensor, SparseTensor
+from spght.tensor import DenseTensor, IntervalTensor, SparseTensor
 from spght.wavelets import haar_basis, cdf_2_2_basis, cubic_basis, hat_basis
 
 
@@ -683,3 +683,120 @@ def test_read_embedded_payload():
     container = io.BytesIO(preamble + buffer.getvalue() + b"trailing bytes")
     container.seek(len(preamble))
     _assert_equal_containers(tensors, SparseGridHierarchicalTensors.read(container))
+
+
+def _interval_container() -> SparseGridHierarchicalTensors:
+    """One subspace whose 40-entry run makes INTERVALS the cheapest kind"""
+    values = np.zeros(64)
+    values[10:50] = np.arange(1.0, 41.0)
+    return SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(6,),
+        subspaces={
+            (6,): Subspace(
+                extents=(64,),
+                precision_bits=64,
+                data=DenseTensor.from_dense(values),
+            )
+        },
+    )
+
+
+def test_roundtrip_intervals_kind():
+    tensors = _interval_container()
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    loaded = SparseGridHierarchicalTensors.read(buffer)
+    _assert_equal_containers(tensors, loaded)
+    subspace = loaded.subspaces[(6,)]
+    assert subspace.kind == TensorKind.INTERVALS
+    assert isinstance(subspace.data, IntervalTensor)
+    assert subspace.data.num_runs == 1
+    raw = bytearray(buffer.getvalue())
+    record, num_dims = _first_record_offset(raw)
+    (num_blob,) = _struct.unpack_from("<Q", raw, record + 4 * num_dims + 25)
+    assert num_blob == 2 * 1 + 40 * 8  # two uint8 bounds + 40 float64 values
+
+
+def test_roundtrip_intervals_from_interval_tensor(tmp_path):
+    array = np.zeros((8, 8))
+    array[:4, :4] = 1.0  # one run in ZC order
+    data = IntervalTensor.from_dense(array, order="ZC")
+    assert data.num_runs == 1
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=2,
+        max_level=(3, 3),
+        subspaces={(3, 3): Subspace(extents=(8, 8), precision_bits=64, data=data)},
+    )
+    path = tmp_path / "intervals.spght"
+    tensors.write(path)
+    loaded = SparseGridHierarchicalTensors.read(path)
+    subspace = loaded.subspaces[(3, 3)]
+    assert subspace.kind == TensorKind.INTERVALS
+    assert subspace.order == "ZC"
+    assert subspace.data.num_runs == 1
+    assert np.array_equal(subspace.data.to_dense(), array)
+
+
+def _interval_record_fixed(raw: bytearray) -> tuple[int, int]:
+    """(record offset, num_dims) of the single-record interval file."""
+    record, num_dims = _first_record_offset(raw)
+    assert raw[record + 4 * num_dims + 1] == 3  # kind byte: INTERVALS
+    return record, num_dims
+
+
+def _interval_file_bytes() -> bytearray:
+    buffer = io.BytesIO()
+    _interval_container().write(buffer)
+    return bytearray(buffer.getvalue())
+
+
+def test_read_rejects_inconsistent_interval_sizes():
+    # the bounds bytes (blob size minus the value bytes) must be a whole
+    # number of (first, last) index pairs
+    corrupted = _interval_file_bytes()
+    record, num_dims = _interval_record_fixed(corrupted)
+    # num data bytes is the last uint64 of the fixed record part
+    num_blob_offset = record + 4 * num_dims + 25
+    (num_blob,) = _struct.unpack_from("<Q", corrupted, num_blob_offset)
+    _struct.pack_into("<Q", corrupted, num_blob_offset, num_blob + 1)
+    with pytest.raises(ValueError, match="inconsistent size"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+    # more runs than stored entries is inconsistent, too
+    corrupted = _interval_file_bytes()
+    record, num_dims = _interval_record_fixed(corrupted)
+    _struct.pack_into("<Q", corrupted, record + 4 * num_dims + 17, 0)  # num stored
+    with pytest.raises(ValueError, match="run count|inconsistent"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_read_rejects_overlapping_interval_runs():
+    # two runs -> patch the second run's first index into the first run,
+    # then reseal the blob checksum so only the run structure is invalid
+    values = np.zeros(64)
+    values[0:8] = 1.0
+    values[16:24] = 2.0
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(6,),
+        subspaces={
+            (6,): Subspace(
+                extents=(64,),
+                precision_bits=64,
+                data=IntervalTensor.from_dense(values),
+            )
+        },
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    corrupted = bytearray(buffer.getvalue())
+    record, num_dims = _interval_record_fixed(corrupted)
+    (num_blob,) = _struct.unpack_from("<Q", corrupted, record + 4 * num_dims + 25)
+    blob_offset = record + 4 * num_dims + 33
+    assert corrupted[blob_offset : blob_offset + 4] == bytes([0, 16, 7, 23])
+    corrupted[blob_offset + 1] = 4  # second run now starts inside the first
+    blob = bytes(corrupted[blob_offset : blob_offset + num_blob])
+    _struct.pack_into("<I", corrupted, blob_offset + num_blob, _zlib.crc32(blob))
+    with pytest.raises(ValueError, match="disjoint"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
