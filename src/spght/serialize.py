@@ -175,7 +175,7 @@ from spght.tensor import (
 from spght.util import per_dimension
 
 FormatMagic = b"sparse grid hierarchical tensors\0"
-FormatVersion: tuple[int, int] = (0, 5)
+FormatVersion: tuple[int, int] = (0, 6)
 
 _ORDER_TO_CODE: dict[Order, int] = {"C": 0, "F": 1, "ZC": 2, "ZF": 3}
 _CODE_TO_ORDER: dict[int, Order] = {c: o for o, c in _ORDER_TO_CODE.items()}

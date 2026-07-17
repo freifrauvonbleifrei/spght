@@ -77,7 +77,7 @@ value = spght.interpolate(np.array([0.3, 0.6, 0.5]), loaded)
 For a complete worked example — compressing the WDAS cloud dataset and
 evaluating the reconstruction error — see [`example/README.md`](example/README.md).
 
-## File format, version 0.5
+## File format, version 0.6
 
 One spght file stores one `SparseGridHierarchicalTensors` container: a set of
 subspaces, each identified by its level vector `l = (l_1, ..., l_d)` and
@@ -102,7 +102,7 @@ General properties:
 |---|---|---|---|
 | 0 | 33 | bytes | magic string: ASCII `"sparse grid hierarchical tensors"` followed by one NUL byte |
 | 33 | 1 | uint8 | format version, major (currently 0) |
-| 34 | 1 | uint8 | format version, minor (currently 5) |
+| 34 | 1 | uint8 | format version, minor (currently 6) |
 | 35 | 2 | uint16 | number of dimensions `d` (1 to 65535) |
 | 37 | 8 | uint64 | number of subspaces `n` |
 | 45 | `d` | uint8 each | maximum level per dimension |
