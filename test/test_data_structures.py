@@ -14,7 +14,7 @@ from spght.data_structures import (
     subspace_order_key,
 )
 from spght.hierarchize import hierarchize
-from spght.tensor import DenseTensor, SparseTensor, make_tensor
+from spght.tensor import DenseTensor, IntervalTensor, SparseTensor, make_tensor
 
 
 @pytest.mark.parametrize("order", ["C", "F", "ZC", "ZF"])
@@ -209,14 +209,145 @@ def test_tensor_kind():
     # the kind is a class-level property of each implementation
     assert DenseTensor.kind == TensorKind.FULL
     assert SparseTensor.kind == TensorKind.POINTWISE
-    # numeric values are the (future) on-disk index-kind identifiers;
-    # EMPTY is deliberately the zero value, so a zero-initialized header
-    # reads as "no data"
+    # numeric values are the (future) on-disk index-kind identifiers
     assert int(TensorKind.EMPTY) == 0
     assert int(TensorKind.FULL) == 1
     assert int(TensorKind.POINTWISE) == 2
+    assert int(TensorKind.INTERVALS) == 3
+    assert IntervalTensor.kind == TensorKind.INTERVALS
+    assert IntervalTensor.from_dense(array).is_sparse
     # a subspace without data defaults to the EMPTY kind
     assert Subspace(extents=(2, 2), precision_bits=64).kind == TensorKind.EMPTY
+
+
+@pytest.mark.parametrize("order", ["C", "F", "ZC", "ZF"])
+def test_interval_from_dense_roundtrip(order):
+    array = np.zeros((4, 8))
+    array[1, 2:7] = np.arange(1.0, 6.0)  # one row-run
+    array[3, 0] = 7.0  # an isolated point
+    t = IntervalTensor.from_dense(array, order=order)
+    assert t.is_sparse
+    assert t.nnz == 6
+    assert np.array_equal(t.to_dense(), array)
+    # semantic equality across storage kinds, per Tensor.__eq__
+    assert t == SparseTensor.from_dense(array, order=order)
+    assert t == DenseTensor.from_dense(array, order=order)
+    # the covered set matches the pointwise one exactly
+    assert np.array_equal(
+        t.linear_indices, SparseTensor.from_dense(array, order=order).linear_indices
+    )
+
+
+def test_interval_run_coalescing():
+    keys = np.array([12, 3, 4, 5, 9, 13])  # unsorted on purpose
+    values = np.arange(6, dtype=np.float64)
+    t = IntervalTensor.from_linear(keys, values, shape=(16,))
+    assert t.num_runs == 3  # (3..5), (9), (12..13)
+    assert np.array_equal(t.linear_indices, [3, 4, 5, 9, 12, 13])
+    # values follow their sorted keys
+    assert t[np.array([3, 9, 12])].tolist() == [1.0, 4.0, 0.0]
+
+
+def test_interval_get_set_semantics():
+    t = IntervalTensor(
+        firsts=[2, 8], lasts=[4, 9], values=np.arange(5.0), shape=(4, 4), order="C"
+    )
+    assert t[3] == 1.0  # covered linear index
+    assert t[0, 2] == 0.0  # multidim (0,2) -> linear 2 -> covered
+    assert t[5] == 0.0  # implicit zero between the runs
+    t[8] = -1.0
+    assert t[2, 0] == -1.0
+    t[3] = 0.0  # zero write inside a run keeps the run structure
+    assert t.num_runs == 2 and t.nnz == 5
+    with pytest.raises(IndexError):
+        t[16]
+
+
+def test_interval_insert_outside_runs():
+    t = IntervalTensor(
+        firsts=[2, 8], lasts=[4, 9], values=np.arange(5.0), shape=(4, 4), order="C"
+    )
+    t[6] = 6.0  # a new isolated point, pending until the next merge
+    assert t[6] == 6.0  # readable before the merge
+    assert t.nnz == 6
+    t[6] = 7.0  # last write wins in the pending buffer, too
+    assert t[6] == 7.0 and t.nnz == 6
+    t[12] = 0.0  # zero write outside the runs is a no-op
+    assert t.nnz == 6 and t[12] == 0.0
+    # bridging writes make the runs coalesce on merge: 2..4 + 5..7 + 8..9
+    t[np.array([5, 7])] = np.array([5.0, 8.0])
+    assert np.array_equal(t.linear_indices, np.arange(2, 10))  # merges
+    assert t.num_runs == 1
+    assert t[np.arange(2, 10)].tolist() == [0.0, 1.0, 2.0, 5.0, 7.0, 8.0, 3.0, 4.0]
+    dense = t.to_dense()
+    assert dense[1, 2] == 7.0  # linear 6 in C order
+    assert np.count_nonzero(dense) == 7  # value at linear 2 is 0.0
+
+
+def test_interval_insert_into_empty_and_merge_limit():
+    t = IntervalTensor.from_dense(np.zeros((8, 8)), order="C", pending_limit=4)
+    for i in range(6):  # crosses the merge threshold
+        t[np.int64(i)] = float(i + 1)
+    assert t.num_runs == 1
+    assert t.nnz == 6
+    assert np.array_equal(t.linear_values, np.arange(1.0, 7.0))
+
+
+def test_interval_insert_seen_by_order_and_items():
+    t = IntervalTensor.from_dense(np.zeros((4, 4)), order="C")
+    t[np.array([1, 2])] = np.array([1.0, 2.0])
+    assert list(t.nonzero_items()) == [((0, 1), 1.0), ((0, 2), 2.0)]
+    relinearized = t.with_order("ZC")
+    assert relinearized[0, 1] == 1.0 and relinearized[0, 2] == 2.0
+
+
+def test_interval_validation():
+    values3 = np.ones(3)
+    with pytest.raises(ValueError, match="within"):
+        IntervalTensor(firsts=[14], lasts=[16], values=values3, shape=(4, 4))
+    with pytest.raises(ValueError, match="last >= first"):
+        IntervalTensor(firsts=[3], lasts=[1], values=values3, shape=(4, 4))
+    with pytest.raises(ValueError, match="disjoint"):
+        IntervalTensor(firsts=[0, 2], lasts=[3, 5], values=np.ones(8), shape=(4, 4))
+    with pytest.raises(ValueError, match="maximal"):
+        # adjacent runs must be merged into one
+        IntervalTensor(firsts=[0, 3], lasts=[2, 5], values=np.ones(6), shape=(4, 4))
+    with pytest.raises(ValueError, match="values"):
+        IntervalTensor(firsts=[0], lasts=[2], values=np.ones(2), shape=(4, 4))
+    with pytest.raises(ValueError, match="unique"):
+        IntervalTensor.from_linear([1, 1], np.ones(2), shape=(4, 4))
+
+
+@pytest.mark.parametrize("order", ["C", "F", "ZC", "ZF"])
+def test_interval_with_order(order):
+    array = np.zeros((4, 8))
+    array[2, 1:6] = 3.0
+    t = IntervalTensor.from_dense(array, order="C")
+    relinearized = t.with_order(order)
+    assert isinstance(relinearized, IntervalTensor)
+    assert relinearized == IntervalTensor.from_dense(array, order=order)
+    if order == "C":
+        assert relinearized is t
+
+
+def test_interval_nbytes_and_items():
+    array = np.zeros((4, 4))
+    array[0, :2] = [1.0, 2.0]
+    t = IntervalTensor.from_dense(array, order="C")
+    assert t.num_runs == 1
+    assert t.nbytes == 2 * 8 + 2 * 8  # two int64 bounds + two float64 values
+    assert list(t.nonzero_items()) == [((0, 0), 1.0), ((0, 1), 2.0)]
+    # explicit zeros inside a run are skipped by nonzero_items
+    t[0] = 0.0
+    assert list(t.nonzero_items()) == [((0, 1), 2.0)]
+
+
+def test_interval_empty():
+    t = IntervalTensor.from_dense(np.zeros((4, 4)), order="C")
+    assert t.nnz == 0 and t.num_runs == 0
+    assert t[7] == 0.0
+    assert np.array_equal(t.to_dense(), np.zeros((4, 4)))
+    assert t.linear_indices.size == 0
 
 
 def test_subspace_holds_tensor():

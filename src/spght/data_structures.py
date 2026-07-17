@@ -6,7 +6,7 @@
 The binary encoding details may still evolve.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import IntEnum
 from pathlib import Path
 from typing import BinaryIO, Sequence, Union
@@ -106,10 +106,10 @@ class Subspace:
     """Describe one logical subspace in memory and on disk."""
 
     extents: tuple[int, ...]
-    # total bits of the stored scalars' number format, 1..255: equal to
-    # the dtype's width for native precision, smaller when the values
-    # come from a narrower format (see number_format) widened losslessly
-    # into the container dtype (e.g. 16 in float32 for bfloat16)
+    # the exact number of bits each stored value occupies in a file's
+    # packed value stream (the data blob after any compression is
+    # undone), 1..255. Until the bit-packing codec is implemented this
+    # must equal the container dtype's width (8 * itemsize).
     precision_bits: int
     data: Tensor | None = None
     # the flavor of the (precision_bits)-wide format the values live on;
@@ -260,6 +260,15 @@ class SparseGridHierarchicalTensors:
         self._validate_subspace(level, subspace)
         self.subspaces[level] = subspace
         self._sort_subspaces()
+
+    def relinearize(self, order: Order) -> "SparseGridHierarchicalTensors":
+        """Re-linearize every subspace's buffer into `order`, in place. Returns self for chaining."""
+        for level, subspace in self.subspaces.items():
+            if subspace.data is not None and subspace.data.order != order:
+                self.subspaces[level] = replace(
+                    subspace, data=subspace.data.with_order(order)
+                )
+        return self
 
     def write(self, target: "str | Path | BinaryIO") -> None:
         """Write the hierarchy to disk in the spght binary format

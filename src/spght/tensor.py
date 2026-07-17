@@ -28,7 +28,7 @@ class TensorKind(IntEnum):
     EMPTY = 0  # no stored values, all entries implicitly zero (the default)
     FULL = 1  # dense: complete value buffer, no index list
     POINTWISE = 2  # sparse: individual sorted linear indices + matching values
-    # future, e.g.: INTERVALS = 3  (runs of linear indices)
+    INTERVALS = 3  # sparse: maximal runs of consecutive linear indices + values
 
 
 class Tensor(abc.ABC):
@@ -97,6 +97,13 @@ class Tensor(abc.ABC):
     @abc.abstractmethod
     def to_dense(self) -> npt.NDArray:
         """Materialize the full n-d numpy array (a fresh copy)."""
+        ...
+
+    @abc.abstractmethod
+    def with_order(self, order: Order) -> "Tensor":
+        """The same logical array linearized in `order`. Returns self
+        (sharing the buffer) when the order already matches, a rearranged
+        copy otherwise."""
         ...
 
     @abc.abstractmethod
@@ -266,6 +273,15 @@ class DenseTensor(Tensor):
         )
         dense[tuple(coords.T)] = self._flat
         return dense
+
+    def with_order(self, order: Order) -> "DenseTensor":
+        if order == self.order:
+            return self
+        # gather: for each target position, the source position holding
+        # the value of the same multidim coordinate
+        coords = indices_to_multidim_indices(np.arange(self.size), self.shape, order)
+        source = multidim_indices_to_indices(coords, self.shape, self.order)
+        return DenseTensor(self._flat[source], self.shape, order=order)
 
     def nonzero_items(self):
         nz = np.flatnonzero(self._flat)
@@ -468,6 +484,253 @@ class SparseTensor(Tensor):
         coords = indices_to_multidim_indices(self._keys, self.shape, self.order)
         for c, v in zip(coords, self._values):
             yield tuple(int(i) for i in c), v
+
+    def with_order(self, order: Order) -> "SparseTensor":
+        if order == self.order:
+            return self
+        # remap the stored keys only: O(nnz), never materializes the array
+        coords = indices_to_multidim_indices(
+            self.linear_indices, self.shape, self.order
+        )
+        keys = multidim_indices_to_indices(coords, self.shape, order)
+        return SparseTensor.from_linear(
+            keys, self.linear_values.copy(), self.shape, order=order
+        )
+
+
+def runs_from_sorted_keys(
+    keys: npt.NDArray[np.int64],
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """Split sorted unique linear indices into maximal runs of consecutive
+    positions; returns (firsts, lasts), both ends inclusive."""
+    if keys.size == 0:
+        return keys, keys
+    breaks = np.flatnonzero(np.diff(keys) > 1)
+    firsts = keys[np.concatenate(([0], breaks + 1))]
+    lasts = keys[np.concatenate((breaks, [keys.size - 1]))]
+    return firsts, lasts
+
+
+class IntervalTensor(Tensor):
+    """Maximal runs of consecutive linear indices + the values they cover.
+
+    The index structure is a sorted list of disjoint runs [first, last]
+    (both inclusive) of linear positions in `order` linearization,
+    separated by at least one uncovered position (maximal, so the
+    representation is canonical). Every covered position stores a value,
+    every other position is implicitly zero.
+
+    Values inside runs are updated in place (including to zero, which
+    keeps the run). Writes outside the covered set are collected in a
+    pending buffer and merged into restructured, again-maximal runs once
+    it grows past `pending_limit` -- so inserting is amortized like in
+    SparseTensor. Writing zero outside the runs is a no-op."""
+
+    kind = TensorKind.INTERVALS
+
+    def __init__(
+        self,
+        firsts: npt.NDArray,
+        lasts: npt.NDArray,
+        values: npt.NDArray,
+        shape: tuple[int, ...],
+        order: Order = "C",
+        pending_limit: int = 1024,
+    ):
+        firsts = np.asarray(firsts, dtype=np.int64)
+        lasts = np.asarray(lasts, dtype=np.int64)
+        values = np.asarray(values)
+        if firsts.ndim != 1 or firsts.shape != lasts.shape:
+            raise ValueError(
+                f"Expected matching 1-D run bounds, got {firsts.shape} "
+                f"and {lasts.shape}"
+            )
+        if values.ndim != 1:
+            raise ValueError(f"Expected a 1-D value buffer, got shape {values.shape}")
+        total = int(np.prod(shape)) if shape else 1
+        if np.any(firsts < 0) or np.any(lasts >= total):
+            raise ValueError(f"Runs must lie within [0, {total}) for shape {shape}")
+        if np.any(lasts < firsts):
+            raise ValueError("Each run needs last >= first")
+        if np.any(firsts[1:] <= lasts[:-1] + 1):
+            raise ValueError(
+                "Runs must be sorted, disjoint, and maximal (at least one "
+                "uncovered position between consecutive runs)"
+            )
+        lengths = lasts - firsts + 1
+        if int(lengths.sum()) != values.shape[0]:
+            raise ValueError(
+                f"Runs cover {int(lengths.sum())} positions, "
+                f"got {values.shape[0]} values"
+            )
+        self.shape = shape
+        self.dtype = values.dtype
+        self.order = order
+        self._firsts = firsts
+        self._lasts = lasts
+        self._values = values
+        # position of each run's first value in the value buffer
+        self._offsets = np.concatenate(([0], np.cumsum(lengths)))
+        self._pending_limit = pending_limit
+        self._pending: dict[int, float] = {}
+
+    @classmethod
+    def from_linear(
+        cls,
+        keys: npt.NDArray,
+        values: npt.NDArray,
+        shape: tuple[int, ...],
+        order: Order = "C",
+        pending_limit: int = 1024,
+    ) -> "IntervalTensor":
+        """Construct from unique linear indices (need not be sorted);
+        consecutive indices coalesce into runs."""
+        keys = np.asarray(keys, dtype=np.int64)
+        values = np.asarray(values)
+        if keys.shape != values.shape or keys.ndim != 1:
+            raise ValueError(
+                f"Expected matching 1-D keys and values, got {keys.shape} "
+                f"and {values.shape}"
+            )
+        sort_order = np.argsort(keys)
+        keys, values = keys[sort_order], values[sort_order]
+        if np.any(keys[1:] == keys[:-1]):
+            raise ValueError("Linear keys must be unique")
+        firsts, lasts = runs_from_sorted_keys(keys)
+        return cls(firsts, lasts, values, shape, order=order, pending_limit=pending_limit)
+
+    @classmethod
+    def from_dense(
+        cls, array: npt.NDArray, order: Order = "C", pending_limit: int = 1024
+    ) -> "IntervalTensor":
+        """Linearize an n-d array and keep runs of its nonzero entries."""
+        flat = DenseTensor.from_dense(array, order=order).linear_values
+        keys = np.flatnonzero(flat)
+        return cls.from_linear(
+            keys, flat[keys], np.asarray(array).shape, order, pending_limit
+        )
+
+    @property
+    def num_runs(self) -> int:
+        self._merge_pending()
+        return int(self._firsts.size)
+
+    @property
+    def nnz(self) -> int:
+        """Number of stored (covered) entries."""
+        return int(self._values.size) + len(self._pending)
+
+    @property
+    def linear_values(self) -> npt.NDArray:
+        self._merge_pending()
+        return self._values
+
+    @property
+    def linear_indices(self) -> npt.NDArray[np.int64]:
+        """The covered positions, expanded from the runs (sorted)."""
+        self._merge_pending()
+        return self._expanded_keys()
+
+    def _expanded_keys(self) -> npt.NDArray[np.int64]:
+        if self._firsts.size == 0:
+            return np.empty(0, dtype=np.int64)
+        lengths = self._lasts - self._firsts + 1
+        # value buffer position j lies in run r at index
+        # firsts[r] + (j - offsets[r])
+        return np.arange(self._offsets[-1]) + np.repeat(
+            self._firsts - self._offsets[:-1], lengths
+        )
+
+    def _merge_pending(self) -> None:
+        """Rebuild the runs to absorb the pending out-of-run writes."""
+        if not self._pending:
+            return
+        new_keys = np.fromiter(
+            self._pending.keys(), dtype=np.int64, count=len(self._pending)
+        )
+        new_values = np.fromiter(
+            self._pending.values(), dtype=self._values.dtype, count=len(self._pending)
+        )
+        # pending keys were outside every run when written, so the union
+        # stays unique
+        keys = np.concatenate([self._expanded_keys(), new_keys])
+        values = np.concatenate([self._values, new_values])
+        self._pending.clear()
+        sort_order = np.argsort(keys)
+        keys, values = keys[sort_order], values[sort_order]
+        self._firsts, self._lasts = runs_from_sorted_keys(keys)
+        self._values = values
+        lengths = self._lasts - self._firsts + 1
+        self._offsets = np.concatenate(([0], np.cumsum(lengths)))
+
+    @property
+    def nbytes(self) -> int:
+        self._merge_pending()
+        return int(self._values.nbytes + self._firsts.nbytes + self._lasts.nbytes)
+
+    def _run_positions(self, linear: npt.NDArray[np.int64]):
+        """Return (value buffer positions, covered mask) for linear indices."""
+        if self._firsts.size == 0:
+            zeros = np.zeros(linear.shape[0], dtype=np.int64)
+            return zeros, np.zeros(linear.shape[0], dtype=bool)
+        run = np.searchsorted(self._firsts, linear, side="right") - 1
+        run_clipped = np.maximum(run, 0)
+        covered = (run >= 0) & (linear <= self._lasts[run_clipped])
+        positions = self._offsets[run_clipped] + (linear - self._firsts[run_clipped])
+        return positions, covered
+
+    def _get_linear(self, linear: npt.NDArray[np.int64]) -> npt.NDArray:
+        positions, covered = self._run_positions(linear)
+        result = np.zeros(linear.shape[0], dtype=self.dtype)
+        result[covered] = self._values[positions[covered]]
+        if self._pending:  # bounded by pending_limit, so this loop is cheap
+            for i in np.flatnonzero(~covered):
+                pending_value = self._pending.get(int(linear[i]))
+                if pending_value is not None:
+                    result[i] = pending_value
+        return result
+
+    def _set_linear(self, linear: npt.NDArray[np.int64], values: npt.NDArray) -> None:
+        positions, covered = self._run_positions(linear)
+        # in-run writes update in place (duplicate indices: last one wins)
+        self._values[positions[covered]] = values[covered]
+        if not np.all(covered):
+            # out-of-run writes are buffered until the next merge; writing
+            # zero outside the runs is a no-op
+            for key, value in zip(linear[~covered], values[~covered]):
+                if value != 0:
+                    self._pending[int(key)] = value
+                else:
+                    self._pending.pop(int(key), None)
+            if len(self._pending) >= self._pending_limit:
+                self._merge_pending()
+
+    def to_dense(self) -> npt.NDArray:
+        self._merge_pending()
+        dense = np.zeros(self.shape, dtype=self.dtype)
+        if self._values.size:
+            coords = indices_to_multidim_indices(
+                self._expanded_keys(), self.shape, self.order
+            )
+            dense[tuple(coords.T)] = self._values
+        return dense
+
+    def nonzero_items(self):
+        keys = self.linear_indices  # merges pending
+        nonzero = np.flatnonzero(self._values)
+        coords = indices_to_multidim_indices(keys[nonzero], self.shape, self.order)
+        for c, v in zip(coords, self._values[nonzero]):
+            yield tuple(int(i) for i in c), v
+
+    def with_order(self, order: Order) -> "IntervalTensor":
+        if order == self.order:
+            return self
+        coords = indices_to_multidim_indices(
+            self.linear_indices, self.shape, self.order  # merges pending
+        )
+        keys = multidim_indices_to_indices(coords, self.shape, order)
+        # from_linear re-derives the runs of the new linearization
+        return IntervalTensor.from_linear(keys, self._values, self.shape, order=order)
 
 
 def make_tensor_from_linear(

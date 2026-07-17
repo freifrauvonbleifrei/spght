@@ -54,6 +54,9 @@ def _build_masks(extent, order):
     rotation once it has been given all the bits it needs.
     """
     bits_needed = [level_from_extent(e) for e in extent]
+    if sum(bits_needed) == 0:
+        # a single-cell block (every extent 1) needs no bits at all
+        return [0] * len(extent)
     remaining = bits_needed[:]
 
     masks = [ba.bitarray(sum(bits_needed)) for _ in range(len(extent))]
@@ -108,23 +111,23 @@ def _pext(src: npt.NDArray[np.uint64], mask: int) -> npt.NDArray[np.uint64]:
 
 
 def _encode(
-    indices: npt.NDArray[np.uint64], masks: Sequence[int]
+    indices: npt.NDArray[np.integer], masks: Sequence[int]
 ) -> npt.NDArray[np.uint64]:
-    indices = np.asarray(indices, dtype=np.uint64)
-    pos = np.zeros(indices.shape[0], dtype=np.uint64)
+    unsigned = np.asarray(indices, dtype=np.uint64)
+    pos = np.zeros(unsigned.shape[0], dtype=np.uint64)
     for n, mask in enumerate(masks):
-        pos |= _pdep(indices[:, n], mask)
+        pos |= _pdep(unsigned[:, n], mask)
     return pos
 
 
 def _decode(
-    pos: npt.NDArray[np.uint64], masks: Sequence[int]
+    pos: npt.NDArray[np.integer], masks: Sequence[int]
 ) -> npt.NDArray[np.uint64]:
     """Returns one multidim index per row."""
-    pos = np.asarray(pos, dtype=np.uint64)
-    out = np.empty((pos.shape[0], len(masks)), dtype=np.uint64)
+    unsigned = np.asarray(pos, dtype=np.uint64)
+    out = np.empty((unsigned.shape[0], len(masks)), dtype=np.uint64)
     for n, mask in enumerate(masks):
-        out[:, n] = _pext(pos, mask)
+        out[:, n] = _pext(unsigned, mask)
     return out
 
 
@@ -242,7 +245,7 @@ def indices_to_multidim_indices(
                 masks = _build_masks_zc(tuple(extents))
             else:
                 masks = _build_masks_zf(tuple(extents))
-            multidim = _decode(idx, masks)  # type: ignore
+            multidim = _decode(idx, masks).astype(np.int64)
         else:
             multidim = _bisect_decode(idx, extents, _round_robin(extents, order))
     else:
@@ -288,7 +291,7 @@ def multidim_indices_to_indices(
                 masks = _build_masks_zc(tuple(extents))
             else:
                 masks = _build_masks_zf(tuple(extents))
-            indices = _encode(idx, masks)  # type: ignore
+            indices = _encode(idx, masks).astype(np.int64)
         else:
             indices = _bisect_encode(idx, extents, _round_robin(extents, order))
     else:

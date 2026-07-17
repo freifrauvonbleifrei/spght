@@ -93,20 +93,26 @@ Subspace record:
                            interleaved=1 (AoS, the components of each
                            point stored together, points in linearization
                            order).
-    precision bits         uint8, 1 to 8 * dtype itemsize: total bits of
-                           the stored scalars' number format
+    precision bits         uint8: the exact number of bits each stored
+                           value occupies in the packed value stream --
+                           the blob after the compression codec (see the
+                           compression byte) is undone; while compression
+                           is 0 the two coincide. 
     number format          uint8, the format's flavor: bits 0-4 exponent
                            width e (0 = integer), bit 5 unsigned flag,
                            bits 6-7 special-value convention (IEEE=0,
                            FN=1, FNUZ=2, OTHER=3). The bias is
                            implied by the convention (IEEE/FN:
-                           2^(e-1)-1, FNUZ: 2^(e-1)). The container
-                           dtype holds the exact widened values, so
-                           readers decode correctly without interpreting
-                           this byte
-    padding bits           uint16; trailing slack bits, meaningful only
-                           under a future bit-packing transform
-                           (carried verbatim until then)
+                           2^(e-1)-1, FNUZ: 2^(e-1)); the mantissa width
+                           is precision - sign - e. OTHER formats are not
+                           parametrically widenable and must keep
+                           precision == container width even once packing
+                           exists
+    padding bits           uint16; trailing slack bits closing the final
+                           byte of the (uncompressed) packed value
+                           stream, meaningful only under the future
+                           bit-packing codec (carried verbatim until
+                           then)
     compression            uint8
     quantization_scale     float32; reserved, with the future semantics
     quantization_zero_pt   int32     logical = scale * (stored - zero_point)
@@ -115,6 +121,15 @@ Subspace record:
     data blob:
         POINTWISE          linear indices in the smallest unsigned dtype that
                            fits prod(extents), then the linear value buffer
+        INTERVALS          run bounds in that same index dtype -- all run
+                           firsts, then the matching run lasts (both
+                           inclusive) -- then the values of every covered
+                           position, run by run. Runs are sorted, disjoint,
+                           and separated by >= 1 uncovered position; the
+                           run count is derived from the blob size. Covered
+                           values may include explicit zeros: the writer
+                           bridges zero gaps into a run while that is no
+                           costlier than an extra pair of bounds
         FULL               the linear value buffer
         EMPTY              nothing
     checksum               uint32, crc32 of the data blob (verified on read);
@@ -149,11 +164,18 @@ from spght.data_structures import (
 )
 from spght.lifting import Basis1D, LiftingScheme, LiftingStep
 from spght.linearize import Order
-from spght.tensor import DenseTensor, SparseTensor, Tensor, TensorKind
+from spght.tensor import (
+    DenseTensor,
+    IntervalTensor,
+    SparseTensor,
+    Tensor,
+    TensorKind,
+    runs_from_sorted_keys,
+)
 from spght.util import per_dimension
 
 FormatMagic = b"sparse grid hierarchical tensors\0"
-FormatVersion: tuple[int, int] = (0, 5)
+FormatVersion: tuple[int, int] = (0, 6)
 
 _ORDER_TO_CODE: dict[Order, int] = {"C": 0, "F": 1, "ZC": 2, "ZF": 3}
 _CODE_TO_ORDER: dict[int, Order] = {c: o for o, c in _ORDER_TO_CODE.items()}
@@ -496,12 +518,55 @@ def _open_stream(target: "str | Path | BinaryIO", mode: str) -> tuple[BinaryIO, 
     return target, False
 
 
-def _cheapest_kind(data: Tensor) -> TensorKind:
-    """The on-disk kind with the smaller data blob; ties go to FULL."""
-    index_itemsize = _index_dtype(data.size).itemsize
-    sparse_bytes = data.nnz * (index_itemsize + data.dtype.itemsize)
-    dense_bytes = data.size * data.dtype.itemsize
-    return TensorKind.POINTWISE if sparse_bytes < dense_bytes else TensorKind.FULL
+def _stored_entries(data: Tensor) -> "tuple[np.ndarray, np.ndarray]":
+    """The nonzero (sorted keys, values) of the tensor. Explicit zeros of
+    sparse-style tensors are dropped, so a tensor whose values were partly
+    reset to zero re-encodes as if those entries had never been stored."""
+    if data.is_sparse:
+        keys, values = data.linear_indices, data.linear_values
+        nonzero = values != 0
+        if not bool(nonzero.all()):
+            keys, values = keys[nonzero], values[nonzero]
+        return keys, values
+    keys = np.flatnonzero(data.linear_values)
+    return keys, data.linear_values[keys]
+
+
+def _bridged_runs(
+    keys: "np.ndarray", index_bits: int, value_bits: int
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Runs of the given nonzero positions, with short zero gaps bridged:
+    storing a gap's zeros explicitly costs gap * value_bits, splitting
+    costs one extra pair of run bounds (2 * index_bits) -- so gaps of up
+    to 2 * index_bits / value_bits zeros are cheaper (or equal, with fewer
+    runs) inside a run. Values are costed at precision_bits each -- their
+    exact stored width -- so the choice minimizes the actual blob size."""
+    firsts, lasts = runs_from_sorted_keys(keys)
+    if firsts.size <= 1:
+        return firsts, lasts
+    gaps = firsts[1:] - lasts[:-1] - 1
+    split_after = np.flatnonzero(gaps * value_bits > 2 * index_bits)
+    merged_firsts = firsts[np.concatenate(([0], split_after + 1))]
+    merged_lasts = lasts[np.concatenate((split_after, [lasts.size - 1]))]
+    return merged_firsts, merged_lasts
+
+
+def _cheapest_kind(
+    size: int, value_bits: int, num_nonzero: int, num_runs: int, num_covered: int
+) -> TensorKind:
+    """The on-disk kind with the smallest data blob: indices cost their
+    dtype width, values their exact stored width (precision_bits). Ties
+    go to the simpler kind (FULL, then POINTWISE, then INTERVALS)."""
+    index_bits = 8 * _index_dtype(size).itemsize
+    kind = TensorKind.FULL
+    cheapest = size * value_bits
+    sparse_bits = num_nonzero * (index_bits + value_bits)
+    if sparse_bits < cheapest:
+        kind, cheapest = TensorKind.POINTWISE, sparse_bits
+    interval_bits = 2 * num_runs * index_bits + num_covered * value_bits
+    if interval_bits < cheapest:
+        kind = TensorKind.INTERVALS
+    return kind
 
 
 def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
@@ -539,35 +604,54 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
     else:
         value_dtype = data.dtype
         little_endian = value_dtype.newbyteorder("<")
-        # store whichever representation yields the smaller data blob,
+        # store whichever representation yields the smallest data blob,
         # independently of the in-memory tensor kind (implicit and explicit
         # zeros read back identically)
-        kind = _cheapest_kind(data)
+        keys, values = _stored_entries(data)
+        index_dtype = _index_dtype(data.size)
+        run_firsts, run_lasts = _bridged_runs(
+            keys, 8 * index_dtype.itemsize, subspace.precision_bits
+        )
+        num_covered = int((run_lasts - run_firsts + 1).sum())
+        kind = _cheapest_kind(
+            data.size,
+            subspace.precision_bits,
+            len(values),
+            len(run_firsts),
+            num_covered,
+        )
         if kind == TensorKind.FULL:
             if data.is_sparse:
                 flat = np.zeros(data.size, dtype=value_dtype)
-                flat[data.linear_indices] = data.linear_values
+                flat[keys] = values
             else:
                 flat = data.linear_values
             num_stored = data.size
             blob = flat.astype(little_endian, copy=False).tobytes()
-        else:
-            if data.is_sparse:
-                keys = data.linear_indices
-                values = data.linear_values
-            else:
-                keys = np.flatnonzero(data.linear_values)
-                values = data.linear_values[keys]
+        elif kind == TensorKind.POINTWISE:
             num_stored = len(values)
             blob = (
-                keys.astype(_index_dtype(data.size)).tobytes()
+                keys.astype(index_dtype).tobytes()
                 + values.astype(little_endian, copy=False).tobytes()
             )
-    if not 1 <= subspace.precision_bits <= 8 * value_dtype.itemsize:
+        else:  # TensorKind.INTERVALS
+            # scatter the nonzeros into the covered buffer
+            covered_values = np.zeros(num_covered, dtype=value_dtype)
+            offsets = np.concatenate(([0], np.cumsum(run_lasts - run_firsts + 1)[:-1]))
+            run = np.searchsorted(run_firsts, keys, side="right") - 1
+            covered_values[offsets[run] + keys - run_firsts[run]] = values
+            num_stored = num_covered
+            blob = (
+                run_firsts.astype(index_dtype).tobytes()
+                + run_lasts.astype(index_dtype).tobytes()
+                + covered_values.astype(little_endian, copy=False).tobytes()
+            )
+    if subspace.precision_bits != 8 * value_dtype.itemsize:
         raise ValueError(
-            f"precision_bits must be in [1, {8 * value_dtype.itemsize}] for "
-            f"dtype {value_dtype}, got {subspace.precision_bits} (the "
-            "container dtype must be wide enough for the stored format)"
+            "precision_bits is the exact stored width of each value, so it "
+            f"must equal the container width {8 * value_dtype.itemsize} of "
+            f"dtype {value_dtype} until the bit-packing codec is "
+            f"implemented; got {subspace.precision_bits}"
         )
     number_format = subspace.number_format
     assert number_format is not None  # normalized in Subspace.__post_init__
@@ -641,11 +725,6 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         raise ValueError(
             f"Invalid value dtype {dtype_kind!r} with itemsize {itemsize}"
         ) from error
-    if not 1 <= precision_bits <= 8 * itemsize:
-        raise ValueError(
-            f"precision_bits must be in [1, {8 * itemsize}] for "
-            f"dtype {value_dtype}, got {precision_bits}"
-        )
     # raises ValueError for structurally invalid flavor bytes
     number_format = NumberFormat.from_byte(number_format_byte)
     if (0 if number_format.unsigned else 1) + number_format.exponent_bits > (
@@ -654,6 +733,13 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         raise ValueError(
             f"Number format {number_format} does not fit in "
             f"{precision_bits} precision bits"
+        )
+    if precision_bits != 8 * itemsize:
+        raise ValueError(
+            "precision_bits is the exact stored width of each value, so it "
+            f"must equal the container width {8 * itemsize} of dtype "
+            f"{value_dtype} until the bit-packing codec is implemented; "
+            f"got {precision_bits}"
         )
 
     if kind == TensorKind.EMPTY:
@@ -664,11 +750,24 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         if num_stored != total:
             raise ValueError("Full subspace record must store every entry")
         expected_blob_bytes = total * itemsize
-    else:  # TensorKind.POINTWISE
+    elif kind == TensorKind.POINTWISE:
         if num_stored > total:
             raise ValueError("Sparse subspace stores more entries than it has")
         index_dtype = _index_dtype(total)
         expected_blob_bytes = num_stored * (index_dtype.itemsize + itemsize)
+    else:  # TensorKind.INTERVALS
+        if num_stored > total:
+            raise ValueError("Interval subspace stores more entries than it has")
+        index_dtype = _index_dtype(total)
+        # the run count is derived from the blob size; every constraint is
+        # checked before the blob is read
+        bounds_bytes = num_blob_bytes - num_stored * itemsize
+        if bounds_bytes < 0 or bounds_bytes % (2 * index_dtype.itemsize) != 0:
+            raise ValueError("Subspace data block has inconsistent size")
+        num_runs = bounds_bytes // (2 * index_dtype.itemsize)
+        if num_runs > num_stored or (num_runs == 0) != (num_stored == 0):
+            raise ValueError("Interval subspace has an inconsistent run count")
+        expected_blob_bytes = num_blob_bytes
     if num_blob_bytes != expected_blob_bytes:
         raise ValueError("Subspace data block has inconsistent size")
 
@@ -686,7 +785,7 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
             value_dtype
         )
         data = DenseTensor(flat, shape, order=order)
-    else:  # TensorKind.POINTWISE
+    elif kind == TensorKind.POINTWISE:
         split = num_stored * index_dtype.itemsize
         keys = np.frombuffer(blob[:split], dtype=index_dtype).astype(np.int64)
         values = np.frombuffer(
@@ -694,6 +793,17 @@ def _decode_record(stream: BinaryIO, num_dims: int) -> Subspace:
         ).astype(value_dtype)
         # SparseTensor validates key range and uniqueness
         data = SparseTensor.from_linear(keys, values, shape, order=order)
+    else:  # TensorKind.INTERVALS
+        split = num_runs * index_dtype.itemsize
+        run_firsts = np.frombuffer(blob[:split], dtype=index_dtype).astype(np.int64)
+        run_lasts = np.frombuffer(blob[split : 2 * split], dtype=index_dtype).astype(
+            np.int64
+        )
+        values = np.frombuffer(
+            blob[2 * split :], dtype=value_dtype.newbyteorder("<")
+        ).astype(value_dtype)
+        # IntervalTensor validates bounds, disjointness, and maximality
+        data = IntervalTensor(run_firsts, run_lasts, values, shape, order=order)
 
     return Subspace(
         extents=shape,

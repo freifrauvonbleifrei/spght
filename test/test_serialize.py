@@ -22,8 +22,8 @@ from spght.data_structures import (
 )
 from spght.hierarchize import hierarchize, dehierarchize
 from spght.lifting import Basis1D
-from spght.serialize import _index_dtype
-from spght.tensor import DenseTensor, SparseTensor
+from spght.serialize import _bridged_runs, _index_dtype
+from spght.tensor import DenseTensor, IntervalTensor, SparseTensor
 from spght.wavelets import haar_basis, cdf_2_2_basis, cubic_basis, hat_basis
 
 
@@ -347,7 +347,7 @@ def test_scheme_name_limited_to_15_characters():
     assert SparseGridHierarchicalTensors.read(buffer).bases[0].scheme.name == "a" * 15
 
 
-def _first_record_offset(raw: bytes) -> tuple[int, int]:
+def _first_record_offset(raw: "bytes | bytearray") -> tuple[int, int]:
     (num_dims,) = _struct.unpack_from("<H", raw, 35)
     (num_subspaces,) = _struct.unpack_from("<Q", raw, 37)
     (basis_length,) = _struct.unpack_from("<I", raw, 45 + 2 * num_dims)
@@ -626,30 +626,21 @@ def test_write_rejects_precision_beyond_dtype():
         tensors.write(io.BytesIO())
 
 
-def test_roundtrip_narrow_number_formats():
-    # bfloat16 coefficients widened losslessly into their float32
-    # container: float32's flavor (8 exponent bits, IEEE) at 16 bits
-    values = np.random.default_rng(41).random((4,)).astype(np.float32)
-    values = (values.view(np.uint32) & 0xFFFF0000).view(np.float32)
-    bfloat16 = NumberFormat(exponent_bits=8)
-    # fp8 E4M3FN coefficients widened losslessly into float16
-    fp8_values = np.array([0.5, -1.75, 448.0, 0.0], dtype=np.float16)
-    e4m3fn = NumberFormat(exponent_bits=4, convention=Convention.FN)
+def test_roundtrip_number_format_flavor():
+    # a non-default flavor at full container width round-trips; the fp8
+    # E4M3FN example becomes serializable at 8 stored bits once the
+    # bit-packing codec exists
+    values = np.array([1, -2, 3, 0], dtype=np.int16)
+    flavor = NumberFormat(exponent_bits=5, convention=Convention.FNUZ)
     tensors = SparseGridHierarchicalTensors(
         dimensions=1,
-        max_level=(3,),
+        max_level=(2,),
         subspaces={
             (2,): Subspace(
                 extents=(4,),
                 precision_bits=16,
                 data=DenseTensor.from_dense(values),
-                number_format=bfloat16,
-            ),
-            (3,): Subspace(
-                extents=(4,),
-                precision_bits=8,
-                data=DenseTensor.from_dense(fp8_values),
-                number_format=e4m3fn,
+                number_format=flavor,
             ),
         },
     )
@@ -658,12 +649,28 @@ def test_roundtrip_narrow_number_formats():
     buffer.seek(0)
     read_back = SparseGridHierarchicalTensors.read(buffer)
     assert read_back.subspaces[(2,)].precision_bits == 16
-    assert read_back.subspaces[(2,)].number_format == bfloat16
-    assert read_back.subspaces[(2,)].data.dtype == np.float32
+    assert read_back.subspaces[(2,)].number_format == flavor
     assert np.array_equal(read_back.subspaces[(2,)].data, values)
-    assert read_back.subspaces[(3,)].precision_bits == 8
-    assert read_back.subspaces[(3,)].number_format == e4m3fn
-    assert np.array_equal(read_back.subspaces[(3,)].data, fp8_values)
+
+
+def test_write_rejects_unpacked_narrow_precision():
+    # precision_bits is the exact stored width: declaring 16 bits for
+    # values sitting in float32 slots is rejected until packing exists
+    values = np.random.default_rng(41).random((4,)).astype(np.float32)
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(2,),
+        subspaces={
+            (2,): Subspace(
+                extents=(4,),
+                precision_bits=16,
+                data=DenseTensor.from_dense(values),
+                number_format=NumberFormat(exponent_bits=8),  # bfloat16
+            ),
+        },
+    )
+    with pytest.raises(ValueError, match="precision_bits.*container width"):
+        tensors.write(io.BytesIO())
 
 
 def test_write_rejects_extents_beyond_uint32():
@@ -683,3 +690,206 @@ def test_read_embedded_payload():
     container = io.BytesIO(preamble + buffer.getvalue() + b"trailing bytes")
     container.seek(len(preamble))
     _assert_equal_containers(tensors, SparseGridHierarchicalTensors.read(container))
+
+
+def _interval_container() -> SparseGridHierarchicalTensors:
+    """One subspace whose 40-entry run makes INTERVALS the cheapest kind"""
+    values = np.zeros(64)
+    values[10:50] = np.arange(1.0, 41.0)
+    return SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(6,),
+        subspaces={
+            (6,): Subspace(
+                extents=(64,),
+                precision_bits=64,
+                data=DenseTensor.from_dense(values),
+            )
+        },
+    )
+
+
+def test_roundtrip_intervals_kind():
+    tensors = _interval_container()
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    loaded = SparseGridHierarchicalTensors.read(buffer)
+    _assert_equal_containers(tensors, loaded)
+    subspace = loaded.subspaces[(6,)]
+    assert subspace.kind == TensorKind.INTERVALS
+    assert isinstance(subspace.data, IntervalTensor)
+    assert subspace.data.num_runs == 1
+    raw = bytearray(buffer.getvalue())
+    record, num_dims = _first_record_offset(raw)
+    (num_blob,) = _struct.unpack_from("<Q", raw, record + 4 * num_dims + 27)
+    assert num_blob == 2 * 1 + 40 * 8  # two uint8 bounds + 40 float64 values
+
+
+def test_roundtrip_intervals_from_interval_tensor(tmp_path):
+    array = np.zeros((8, 8))
+    array[:4, :4] = 1.0  # one run in ZC order
+    data = IntervalTensor.from_dense(array, order="ZC")
+    assert data.num_runs == 1
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=2,
+        max_level=(3, 3),
+        subspaces={(3, 3): Subspace(extents=(8, 8), precision_bits=64, data=data)},
+    )
+    path = tmp_path / "intervals.spght"
+    tensors.write(path)
+    loaded = SparseGridHierarchicalTensors.read(path)
+    subspace = loaded.subspaces[(3, 3)]
+    assert subspace.kind == TensorKind.INTERVALS
+    assert subspace.order == "ZC"
+    assert subspace.data.num_runs == 1
+    assert np.array_equal(subspace.data.to_dense(), array)
+
+
+def _interval_record_fixed(raw: bytearray) -> tuple[int, int]:
+    """(record offset, num_dims) of the single-record interval file."""
+    record, num_dims = _first_record_offset(raw)
+    assert raw[record + 4 * num_dims + 1] == 3  # kind byte: INTERVALS
+    return record, num_dims
+
+
+def _interval_file_bytes() -> bytearray:
+    buffer = io.BytesIO()
+    _interval_container().write(buffer)
+    return bytearray(buffer.getvalue())
+
+
+def test_read_rejects_inconsistent_interval_sizes():
+    # the bounds bytes (blob size minus the value bytes) must be a whole
+    # number of (first, last) index pairs
+    corrupted = _interval_file_bytes()
+    record, num_dims = _interval_record_fixed(corrupted)
+    # num data bytes is the last uint64 of the fixed record part
+    num_blob_offset = record + 4 * num_dims + 27
+    (num_blob,) = _struct.unpack_from("<Q", corrupted, num_blob_offset)
+    _struct.pack_into("<Q", corrupted, num_blob_offset, num_blob + 1)
+    with pytest.raises(ValueError, match="inconsistent size"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+    # more runs than stored entries is inconsistent, too
+    corrupted = _interval_file_bytes()
+    record, num_dims = _interval_record_fixed(corrupted)
+    _struct.pack_into("<Q", corrupted, record + 4 * num_dims + 19, 0)  # num stored
+    with pytest.raises(ValueError, match="run count|inconsistent"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_read_rejects_overlapping_interval_runs():
+    # two runs -> patch the second run's first index into the first run,
+    # then reseal the blob checksum so only the run structure is invalid
+    values = np.zeros(64)
+    values[0:8] = 1.0
+    values[16:24] = 2.0
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(6,),
+        subspaces={
+            (6,): Subspace(
+                extents=(64,),
+                precision_bits=64,
+                data=IntervalTensor.from_dense(values),
+            )
+        },
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    corrupted = bytearray(buffer.getvalue())
+    record, num_dims = _interval_record_fixed(corrupted)
+    (num_blob,) = _struct.unpack_from("<Q", corrupted, record + 4 * num_dims + 27)
+    blob_offset = record + 4 * num_dims + 35
+    assert corrupted[blob_offset : blob_offset + 4] == bytes([0, 16, 7, 23])
+    corrupted[blob_offset + 1] = 4  # second run now starts inside the first
+    blob = bytes(corrupted[blob_offset : blob_offset + num_blob])
+    _struct.pack_into("<I", corrupted, blob_offset + num_blob, _zlib.crc32(blob))
+    with pytest.raises(ValueError, match="disjoint"):
+        SparseGridHierarchicalTensors.read(io.BytesIO(bytes(corrupted)))
+
+
+def test_intervals_bridge_short_zero_gaps():
+    # 16 precision bits with uint16 indices (16 bits): a gap of g zeros is
+    # bridged iff g * 16 <= 2 * 16, i.e. g <= 2 (ties bridge)
+    values = np.zeros(300, dtype=np.float16)
+    values[10:20] = 1.0
+    values[22:31] = 2.0  # gap of 2 zeros -> bridged
+    values[40:50] = 3.0  # gap of 9 zeros -> split
+    keys = np.flatnonzero(values)
+    firsts, lasts = _bridged_runs(keys, index_bits=16, value_bits=16)
+    assert firsts.tolist() == [10, 40] and lasts.tolist() == [30, 49]
+
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(9,),
+        subspaces={
+            (9,): Subspace(
+                extents=(300,),
+                precision_bits=16,
+                data=DenseTensor.from_dense(values),
+            )
+        },
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    loaded = SparseGridHierarchicalTensors.read(buffer)
+    subspace = loaded.subspaces[(9,)]
+    assert subspace.kind == TensorKind.INTERVALS
+    assert subspace.data.num_runs == 2
+    # the bridged gap travels as explicit zeros inside the first run
+    assert subspace.data[np.array([20, 21])].tolist() == [0.0, 0.0]
+    assert np.array_equal(subspace.data.to_dense(), values)
+
+
+def test_reencodes_zeroed_intervals_as_pointwise():
+    # a long run whose values were mostly reset to zero re-encodes from
+    # the two surviving nonzeros, for which pointwise is cheapest
+    values = np.zeros(64)
+    values[0:40] = np.arange(1.0, 41.0)
+    data = IntervalTensor.from_dense(values)
+    data[np.arange(1, 39)] = 0.0  # in-run zero writes keep the run
+    assert data.num_runs == 1 and data.nnz == 40
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(6,),
+        subspaces={(6,): Subspace(extents=(64,), precision_bits=64, data=data)},
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    subspace = SparseGridHierarchicalTensors.read(buffer).subspaces[(6,)]
+    assert subspace.kind == TensorKind.POINTWISE
+    assert subspace.data.nnz == 2
+    assert np.array_equal(subspace.data.to_dense(), data.to_dense())
+
+
+def test_reencodes_densified_intervals_as_full():
+    data = IntervalTensor.from_dense(np.arange(1.0, 65.0))  # fully covered
+    tensors = SparseGridHierarchicalTensors(
+        dimensions=1,
+        max_level=(6,),
+        subspaces={(6,): Subspace(extents=(64,), precision_bits=64, data=data)},
+    )
+    buffer = io.BytesIO()
+    tensors.write(buffer)
+    buffer.seek(0)
+    subspace = SparseGridHierarchicalTensors.read(buffer).subspaces[(6,)]
+    assert subspace.kind == TensorKind.FULL
+    assert np.array_equal(subspace.data.to_dense(), data.to_dense())
+
+
+def test_interval_bridging_scales_with_precision():
+    # same gap of 4 zeros, 16-bit indices: 16-bit values split the runs
+    # (4 * 16 > 2 * 16), 8-bit values bridge them (4 * 8 <= 2 * 16) --
+    # lower stored precision admits proportionally longer bridges
+    # (exercisable through files once the bit-packing codec exists)
+    values = np.zeros(300)
+    values[10:20] = 1.0
+    values[24:31] = 2.0  # gap of 4 zeros
+    keys = np.flatnonzero(values)
+    firsts_16, _ = _bridged_runs(keys, index_bits=16, value_bits=16)
+    assert len(firsts_16) == 2
+    firsts_8, lasts_8 = _bridged_runs(keys, index_bits=16, value_bits=8)
+    assert firsts_8.tolist() == [10] and lasts_8.tolist() == [30]
