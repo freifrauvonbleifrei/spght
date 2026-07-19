@@ -355,7 +355,6 @@ def test_subspace_holds_tensor():
     dense = DenseTensor.from_dense(array, order="C")
     subspace = Subspace(extents=(2, 4), precision_bits=64, data=dense)
     assert subspace.kind == TensorKind.FULL
-    assert not subspace.is_sparse
     assert subspace.num_bytes == dense.nbytes
     assert np.array_equal(subspace.data, array)
 
@@ -365,7 +364,7 @@ def test_subspace_holds_tensor():
         data=SparseTensor.from_dense(array, order="C"),
     )
     assert sparse_sub.kind == TensorKind.POINTWISE
-    assert sparse_sub.is_sparse
+    assert sparse_sub.data.is_sparse
 
     with pytest.raises(ValueError):
         Subspace(extents=(4, 2), precision_bits=64, data=dense)  # shape mismatch

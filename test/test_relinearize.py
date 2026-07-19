@@ -99,7 +99,7 @@ def test_interpolate_invariant_after_compress():
     # sparse (POINTWISE) subspaces take the key-remapping path
     hierarchical = hierarchize(np.random.default_rng(8).random((16, 16)))
     compressed = compress(hierarchical, epsilon=0.05)
-    assert any(s.is_sparse for s in compressed.subspaces.values())
+    assert any(s.data.is_sparse for s in compressed.subspaces.values())
     midpoints = midpoint_coordinates_from_level([4, 4])
     expected = interpolate(midpoints, compressed)
     compressed.relinearize("ZF")

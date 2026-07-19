@@ -138,10 +138,6 @@ class Subspace:
         return self.data.kind if self.data is not None else TensorKind.EMPTY
 
     @property
-    def is_sparse(self) -> bool:
-        return self.data.is_sparse if self.data is not None else False
-
-    @property
     def num_bytes(self) -> int:
         return self.data.nbytes if self.data is not None else 0
 
