@@ -24,7 +24,7 @@ def extent_from_level(level: int) -> int:
 
 Order = Literal["C", "F", "ZC", "ZF"]
 
-MultiIndices: TypeAlias = Union[Sequence[Sequence[int]], npt.NDArray[np.integer]]
+MultiIndices: TypeAlias = Sequence[Sequence[int]] | npt.NDArray[np.integer]
 IndexLike: TypeAlias = Union[int, np.integer, Sequence[int], MultiIndices]
 Coordinates: TypeAlias = Union[Sequence[Sequence[float]], npt.NDArray[np.floating]]
 

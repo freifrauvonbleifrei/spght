@@ -13,9 +13,9 @@ function values/surpluses. Expressed as a pywt filter bank
 `half_haar_filters`; the lifting scheme `spght.wavelets.haar` computes the
 bit-identical transform."""
 
-from typing import TYPE_CHECKING, Sequence
-
+from collections.abc import Sequence
 import numpy.typing as npt
+from typing import TYPE_CHECKING
 
 from spght.util import depends_on_optional, module_is_available
 

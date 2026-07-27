@@ -7,7 +7,7 @@
 from collections.abc import Callable, Sequence
 from functools import wraps
 from importlib.util import find_spec
-from typing import TypeVar, Union
+from typing import TypeVar
 
 T = TypeVar("T")
 
