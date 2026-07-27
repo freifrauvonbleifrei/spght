@@ -27,7 +27,6 @@ def compress(
         max_level=hierarchical_tensors.max_level,
         min_level=hierarchical_tensors.min_level,
         bases=hierarchical_tensors.bases,
-        subspaces=dict(),
         metadata=hierarchical_tensors.metadata,
     )
     for level, subspace in hierarchical_tensors.subspaces.items():

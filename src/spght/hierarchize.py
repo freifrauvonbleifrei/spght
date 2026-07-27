@@ -4,10 +4,10 @@
 
 # Hierarchize a multi-dimensional function on a structured grid using the unidirectional principle.
 
+from collections.abc import Sequence
 import itertools
 import numpy as np
 import numpy.typing as npt
-from typing import Sequence
 
 import spght.data_structures as data_structures
 from spght.lifting import (
