@@ -4,9 +4,10 @@
 
 """Lifting-scheme wavelet transforms over centerings and boundary rules."""
 
-import itertools
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Literal, Sequence, Union
+import itertools
+from typing import Literal, TypeAlias, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -87,7 +88,7 @@ class Basis1D:
         )
 
 
-BasisLike = Union[Basis1D, Sequence[Basis1D]]
+BasisLike: TypeAlias = Union[Basis1D, Sequence[Basis1D]]
 
 
 def as_bases(basis: BasisLike, num_dim: int) -> tuple[Basis1D, ...]:

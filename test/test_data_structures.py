@@ -444,7 +444,7 @@ def test_subspace_number_format():
 def test_hierarchize_produces_dense_tensors():
     nodal_values = np.random.default_rng(2).random((4, 8))
     hierarchical_tensors = hierarchize(nodal_values)
-    for _, subspace in hierarchical_tensors.subspaces.items():
+    for subspace in hierarchical_tensors.subspaces.values():
         assert subspace.data is not None
         assert not subspace.data.is_sparse  # dense until compress() sparsifies
         assert subspace.data.linear_values.ndim == 1  # linear storage invariant

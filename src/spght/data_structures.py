@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 from pathlib import Path
-from typing import BinaryIO, Union
+from typing import BinaryIO, TypeAlias, Union
 
 import numpy as np
 
@@ -32,20 +32,16 @@ class OpaqueValue:
 
 # metadata values as they come back from a file: numeric sequences are
 # normalized to tuples so that containers compare cleanly
-MetadataValue = (
-    str
-    | float
-    | int
-    | Sequence[str]
-    | Sequence[float]
-    | Sequence[int]
-    | OpaqueValue
-    | bytes
-    | Sequence[str]
-    | Sequence[float]
-    | Sequence[int]
-    | OpaqueValue,
-)
+MetadataValue: TypeAlias = Union[
+    str,
+    float,
+    int,
+    bytes,
+    Sequence[str],
+    Sequence[float],
+    Sequence[int],
+    OpaqueValue,
+]
 
 
 class Convention(IntEnum):

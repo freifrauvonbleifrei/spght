@@ -9,7 +9,7 @@ import itertools
 import numpy as np
 import numpy.typing as npt
 
-import spght.data_structures as data_structures
+from spght.data_structures import SparseGridHierarchicalTensors, Subspace
 from spght.lifting import (
     Basis1D,
     BasisLike,
@@ -26,7 +26,7 @@ def hierarchize(
     nodal_values: npt.NDArray,
     wavelet: BasisLike | None = None,
     min_level: int | Sequence[int] = 0,
-) -> data_structures.SparseGridHierarchicalTensors:
+) -> SparseGridHierarchicalTensors:
     """Decompose nodal values into hierarchical subspaces.
 
     `wavelet` is a Basis1D (or one per dimension); the default is the
@@ -68,7 +68,7 @@ def hierarchize(
         )
     )
 
-    return data_structures.SparseGridHierarchicalTensors(
+    return SparseGridHierarchicalTensors(
         dimensions=num_dim,
         max_level=tuple(level),
         min_level=minimum_levels,
@@ -76,7 +76,7 @@ def hierarchize(
         subspaces={
             # construction from a full array always yields dense (linear)
             # storage; sparsification only happens in compress()
-            tuple(lv): data_structures.Subspace(
+            tuple(lv): Subspace(
                 extents=v.shape,
                 precision_bits=64,
                 data=DenseTensor.from_dense(v),
@@ -87,7 +87,7 @@ def hierarchize(
 
 
 def dehierarchize(
-    hierarchical_tensors: data_structures.SparseGridHierarchicalTensors,
+    hierarchical_tensors: SparseGridHierarchicalTensors,
     wavelet: BasisLike | None = None,
 ) -> npt.NDArray:
     """Inverse of hierarchize: synthesize the full grid of nodal values.
@@ -104,7 +104,7 @@ def dehierarchize(
         hierarchical_tensors.bases if wavelet is None else as_bases(wavelet, num_dim)
     )
 
-    band_extents: list[dict[int, int]] = [dict() for _ in range(num_dim)]
+    band_extents: list[dict[int, int]] = [{} for _ in range(num_dim)]
     for stored_level, subspace in hierarchical_tensors.subspaces.items():
         for d in range(num_dim):
             band_extents[d][stored_level[d]] = subspace.extents[d]

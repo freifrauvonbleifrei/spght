@@ -7,10 +7,11 @@ The binary encoding details may still evolve.
 """
 
 import abc
+from collections.abc import Iterator
 from enum import IntEnum
 import numpy as np
 import numpy.typing as npt
-from typing import ClassVar, Iterator
+from typing import ClassVar
 
 from spght.linearize import (
     IndexLike,
@@ -171,7 +172,7 @@ class Tensor(abc.ABC):
         return values[0] if scalar else values
 
     def __setitem__(self, idx: IndexLike, value) -> None:
-        linear, scalar = self._normalize_index(idx)
+        linear, _ = self._normalize_index(idx)
         values = np.asarray(value, dtype=self.dtype)
         if values.ndim == 0:
             values = np.full(
