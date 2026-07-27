@@ -7,7 +7,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 import itertools
-from typing import Literal, TypeAlias, Union
+from typing import Literal, TypeAlias
 
 import numpy as np
 import numpy.typing as npt
@@ -88,7 +88,7 @@ class Basis1D:
         )
 
 
-BasisLike: TypeAlias = Union[Basis1D, Sequence[Basis1D]]
+BasisLike: TypeAlias = Basis1D | Sequence[Basis1D]
 
 
 def as_bases(basis: BasisLike, num_dim: int) -> tuple[Basis1D, ...]:

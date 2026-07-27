@@ -9,7 +9,7 @@ from functools import lru_cache
 import numpy as np
 import numpy.typing as npt
 import math
-from typing import Literal, TypeAlias, Union
+from typing import Literal, TypeAlias
 
 
 def level_from_extent(extent: int) -> int:
@@ -25,8 +25,8 @@ def extent_from_level(level: int) -> int:
 Order = Literal["C", "F", "ZC", "ZF"]
 
 MultiIndices: TypeAlias = Sequence[Sequence[int]] | npt.NDArray[np.integer]
-IndexLike: TypeAlias = Union[int, np.integer, Sequence[int], MultiIndices]
-Coordinates: TypeAlias = Union[Sequence[Sequence[float]], npt.NDArray[np.floating]]
+IndexLike: TypeAlias = int | np.integer | Sequence[int] | MultiIndices
+Coordinates: TypeAlias = Sequence[Sequence[float]] | npt.NDArray[np.floating]
 
 
 def _all_powers_of_two(extents: Sequence[int]) -> bool:
