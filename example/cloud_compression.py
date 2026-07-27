@@ -22,7 +22,7 @@ def vdb_grid_extent(grid) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 def levels_from_extent(extent: np.ndarray) -> np.ndarray:
     """Compute per-dimension level = ceil(log2(extent)) for power-of-2 padding."""
-    return np.array([int(math.ceil(math.log2(max(e, 1)))) for e in extent])
+    return np.array([math.ceil(math.log2(max(e, 1))) for e in extent])
 
 
 def cast_precision(

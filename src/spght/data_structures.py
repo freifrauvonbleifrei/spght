@@ -6,10 +6,11 @@
 The binary encoding details may still evolve.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 from pathlib import Path
-from typing import BinaryIO, Sequence, Union
+from typing import BinaryIO, TypeAlias
 
 import numpy as np
 
@@ -31,16 +32,16 @@ class OpaqueValue:
 
 # metadata values as they come back from a file: numeric sequences are
 # normalized to tuples so that containers compare cleanly
-MetadataValue = Union[
-    str,
-    float,
-    int,
-    bytes,
-    Sequence[str],
-    Sequence[float],
-    Sequence[int],
-    OpaqueValue,
-]
+MetadataValue: TypeAlias = (
+    str
+    | float
+    | int
+    | bytes
+    | Sequence[str]
+    | Sequence[float]
+    | Sequence[int]
+    | OpaqueValue
+)
 
 
 class Convention(IntEnum):
@@ -136,10 +137,6 @@ class Subspace:
     def kind(self) -> TensorKind:
         """Storage kind of the subspace data (EMPTY when no data is attached)."""
         return self.data.kind if self.data is not None else TensorKind.EMPTY
-
-    @property
-    def is_sparse(self) -> bool:
-        return self.data.is_sparse if self.data is not None else False
 
     @property
     def num_bytes(self) -> int:

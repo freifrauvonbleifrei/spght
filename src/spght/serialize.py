@@ -560,9 +560,9 @@ def _cheapest_kind(
     index_bits = 8 * _index_dtype(size).itemsize
     kind = TensorKind.FULL
     cheapest = size * value_bits
-    sparse_bits = num_nonzero * (index_bits + value_bits)
-    if sparse_bits < cheapest:
-        kind, cheapest = TensorKind.POINTWISE, sparse_bits
+    pointwise_bits = num_nonzero * (index_bits + value_bits)
+    if pointwise_bits < cheapest:
+        kind, cheapest = TensorKind.POINTWISE, pointwise_bits
     interval_bits = 2 * num_runs * index_bits + num_covered * value_bits
     if interval_bits < cheapest:
         kind = TensorKind.INTERVALS
@@ -634,7 +634,7 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
                 keys.astype(index_dtype).tobytes()
                 + values.astype(little_endian, copy=False).tobytes()
             )
-        else:  # TensorKind.INTERVALS
+        elif kind == TensorKind.INTERVALS:
             # scatter the nonzeros into the covered buffer
             covered_values = np.zeros(num_covered, dtype=value_dtype)
             offsets = np.concatenate(([0], np.cumsum(run_lasts - run_firsts + 1)[:-1]))
@@ -646,6 +646,8 @@ def _encode_record(subspace: Subspace, num_dims: int) -> bytes:
                 + run_lasts.astype(index_dtype).tobytes()
                 + covered_values.astype(little_endian, copy=False).tobytes()
             )
+        else:
+            raise ValueError("Cheapest kind not known.")
     if subspace.precision_bits != 8 * value_dtype.itemsize:
         raise ValueError(
             "precision_bits is the exact stored width of each value, so it "

@@ -41,7 +41,7 @@ def _vertex_basis(
 # The equivalent classical filter bank lives in spght.pywt_compat, which
 # bridges to the optional PyWavelets dependency; half_haar is None when
 # PyWavelets is not installed.
-from spght.pywt_compat import half_haar, half_haar_filters  # noqa: E402, F401
+from spght.pywt_compat import half_haar, half_haar_filters  # noqa: F401
 
 # equivalent to half_haar:
 haar = LiftingScheme(

@@ -31,3 +31,7 @@ exclude = ["^example/"]
 [[tool.mypy.overrides]]
 module = "pywt.*"
 ignore_missing_imports = true
+
+[tool.ruff]
+# ignore "Import block is un-sorted or un-formatted"
+lint.ignore = ["I001"]

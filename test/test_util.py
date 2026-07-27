@@ -5,6 +5,7 @@
 import pytest
 
 from spght.util import depends_on_optional, module_is_available
+from spght import pywt_compat
 
 
 def test_module_is_available():
@@ -28,8 +29,6 @@ def test_depends_on_optional():
 
 
 def test_pywt_compat_degrades_without_pywt(monkeypatch):
-    import spght.pywt_compat as pywt_compat
-
     monkeypatch.setattr(pywt_compat, "PYWT_AVAILABLE", False)
     # the type check needs no import when pywt is (simulated) missing
     assert pywt_compat.is_pywt_wavelet(object()) is False

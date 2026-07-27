@@ -4,11 +4,12 @@
 
 import bitarray as ba
 import bitarray.util as bau
+from collections.abc import Sequence
 from functools import lru_cache
 import numpy as np
 import numpy.typing as npt
 import math
-from typing import Literal, Sequence, Union
+from typing import Literal, TypeAlias
 
 
 def level_from_extent(extent: int) -> int:
@@ -23,9 +24,9 @@ def extent_from_level(level: int) -> int:
 
 Order = Literal["C", "F", "ZC", "ZF"]
 
-MultiIndices = Union[Sequence[Sequence[int]], npt.NDArray[np.integer]]
-IndexLike = Union[int, np.integer, Sequence[int], MultiIndices]
-Coordinates = Union[Sequence[Sequence[float]], npt.NDArray[np.floating]]
+MultiIndices: TypeAlias = Sequence[Sequence[int]] | npt.NDArray[np.integer]
+IndexLike: TypeAlias = int | np.integer | Sequence[int] | MultiIndices
+Coordinates: TypeAlias = Sequence[Sequence[float]] | npt.NDArray[np.floating]
 
 
 def _all_powers_of_two(extents: Sequence[int]) -> bool:

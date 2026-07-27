@@ -57,8 +57,6 @@ except PackageNotFoundError:  # not installed, e.g. running from a checkout
     __version__ = "unknown"
 
 __all__ = [
-    "MetadataValue",
-    "OpaqueValue",
     "Basis1D",
     "BoundaryRule",
     "CellCentered",
@@ -70,8 +68,10 @@ __all__ = [
     "IntervalTensor",
     "LiftingScheme",
     "LiftingStep",
+    "MetadataValue",
     "Neumann",
     "NumberFormat",
+    "OpaqueValue",
     "Order",
     "Periodic",
     "SparseGridHierarchicalTensors",

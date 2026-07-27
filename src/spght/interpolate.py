@@ -2,9 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Sequence
 import numpy as np
 import numpy.typing as npt
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 
 from spght.basis import CellCentered

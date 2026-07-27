@@ -13,9 +13,9 @@ function values/surpluses. Expressed as a pywt filter bank
 `half_haar_filters`; the lifting scheme `spght.wavelets.haar` computes the
 bit-identical transform."""
 
-from typing import TYPE_CHECKING, Sequence
-
+from collections.abc import Sequence
 import numpy.typing as npt
+from typing import TYPE_CHECKING
 
 from spght.util import depends_on_optional, module_is_available
 
@@ -57,8 +57,9 @@ def reconstruct_block_haar_pywt(
     the classical wavelet machinery."""
     import pywt
 
+    # alternatively implemented in pywt directly as fswavedecn
+    # https://github.com/PyWavelets/pywt/blob/1.6.x/doc/source/ref/2d-decompositions-overview.rst#fully-separable-discrete-wavelet-transform
     for d, is_scaling in enumerate(scaling_dimensions):
-        # one inverse transform step along each dimension doubles its extent
         if is_scaling:
             coefficients = pywt.idwt(coefficients, None, half_haar, axis=d)
         else:

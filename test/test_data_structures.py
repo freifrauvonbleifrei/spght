@@ -355,7 +355,6 @@ def test_subspace_holds_tensor():
     dense = DenseTensor.from_dense(array, order="C")
     subspace = Subspace(extents=(2, 4), precision_bits=64, data=dense)
     assert subspace.kind == TensorKind.FULL
-    assert not subspace.is_sparse
     assert subspace.num_bytes == dense.nbytes
     assert np.array_equal(subspace.data, array)
 
@@ -365,7 +364,7 @@ def test_subspace_holds_tensor():
         data=SparseTensor.from_dense(array, order="C"),
     )
     assert sparse_sub.kind == TensorKind.POINTWISE
-    assert sparse_sub.is_sparse
+    assert sparse_sub.data.is_sparse
 
     with pytest.raises(ValueError):
         Subspace(extents=(4, 2), precision_bits=64, data=dense)  # shape mismatch
@@ -445,7 +444,7 @@ def test_subspace_number_format():
 def test_hierarchize_produces_dense_tensors():
     nodal_values = np.random.default_rng(2).random((4, 8))
     hierarchical_tensors = hierarchize(nodal_values)
-    for _, subspace in hierarchical_tensors.subspaces.items():
+    for subspace in hierarchical_tensors.subspaces.values():
         assert subspace.data is not None
         assert not subspace.data.is_sparse  # dense until compress() sparsifies
         assert subspace.data.linear_values.ndim == 1  # linear storage invariant
