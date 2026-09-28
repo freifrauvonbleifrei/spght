@@ -96,6 +96,12 @@ if __name__ == "__main__":
         choices=[16, 32, 64],
         help="Float precision of the coefficient values in the .spght file.",
     )
+    parser.add_argument(
+        "--structure",
+        choices=["independent", "crown"],
+        default="independent",
+        help="Independent thresholding or Haar support-dependent crown compression.",
+    )
     args = parser.parse_args()
 
     # Load the cloud from .vdb input file
@@ -123,7 +129,9 @@ if __name__ == "__main__":
     report("Previously", hierarchical_values)
     # partial compression: surviving coefficients per subspace are kept and
     # stored sparsely where that pays off
-    compressed_values = spght.compress(hierarchical_values, epsilon=args.epsilon)
+    compressed_values = spght.compress(
+        hierarchical_values, epsilon=args.epsilon, structure=args.structure
+    )
     compressed_values = cast_precision(compressed_values, args.precision_bits)
     report("After compression", compressed_values)
 
